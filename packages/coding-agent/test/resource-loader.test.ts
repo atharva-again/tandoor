@@ -1037,6 +1037,152 @@ export default function(pi: ExtensionAPI) {
 			expect(runner.getCommand("deploy:2")?.description).toBe("global command");
 			expect(runner.getToolDefinition("duplicate-tool")?.description).toBe("explicit tool");
 		});
+
+		it("should leave out replaceable extensions whose names another extension registers", async () => {
+			// A third-party extension registering the same command replaces the built-in implementation.
+			const globalExtDir = join(agentDir, "extensions");
+			mkdirSync(globalExtDir, { recursive: true });
+			writeFileSync(
+				join(globalExtDir, "other-search.ts"),
+				`
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+export default function(pi: ExtensionAPI) {
+  pi.registerCommand("search", { description: "other search", handler: async () => {} });
+}`,
+			);
+
+			const loader = new DefaultResourceLoader({
+				cwd,
+				agentDir,
+				extensionFactories: [
+					{
+						name: "search",
+						replaceable: true,
+						factory: (pi) =>
+							pi.registerCommand("search", { description: "built-in search", handler: async () => {} }),
+					},
+					{
+						name: "llama",
+						replaceable: true,
+						factory: (pi) =>
+							pi.registerCommand("llama", { description: "built-in llama", handler: async () => {} }),
+					},
+				],
+			});
+			await loader.reload();
+
+			const extensionsResult = loader.getExtensions();
+			expect(extensionsResult.extensions.map((extension) => extension.path)).toEqual([
+				join(globalExtDir, "other-search.ts"),
+				"<inline:llama>",
+			]);
+			expect(extensionsResult.errors).toEqual([]);
+
+			const runner = new ExtensionRunner(
+				extensionsResult.extensions,
+				extensionsResult.runtime,
+				cwd,
+				SessionManager.inMemory(),
+				await createModelRegistry(AuthStorage.create(join(tempDir, "auth-replaceable.json"))),
+			);
+			expect(runner.getCommand("search")?.description).toBe("other search");
+			expect(runner.getCommand("llama")?.description).toBe("built-in llama");
+		});
+
+		it("should skip built-in extensions disabled in settings", async () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ extensions: ["-builtin:search"] }));
+			const loaded: string[] = [];
+			const loader = new DefaultResourceLoader({
+				cwd,
+				agentDir,
+				extensionFactories: [
+					{ name: "search", builtin: true, factory: () => void loaded.push("search") },
+					{ name: "llama", builtin: true, factory: () => void loaded.push("llama") },
+				],
+			});
+			await loader.reload();
+
+			expect(loader.getExtensions().extensions.map((extension) => extension.path)).toEqual(["builtin:llama"]);
+			expect(loader.getExtensions().extensions[0].sourceInfo).toMatchObject({
+				path: "builtin:llama",
+				source: "builtin",
+			});
+			expect(loader.getExtensions().extensions[0].hidden).toBe(true);
+			expect(loaded).toEqual(["llama"]);
+		});
+
+		it("should load built-in extensions after file extensions with and without trust resolution", async () => {
+			const userExtDir = join(agentDir, "extensions");
+			mkdirSync(userExtDir, { recursive: true });
+			writeFileSync(join(userExtDir, "user.ts"), "export default function() {}");
+			mkdirSync(join(cwd, ".pi"), { recursive: true });
+			// A project override gives the built-in project scope, which must not move it ahead.
+			writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ extensions: ["+builtin:search"] }));
+			const loader = new DefaultResourceLoader({
+				cwd,
+				agentDir,
+				extensionFactories: [{ name: "search", builtin: true, factory: () => {} }],
+			});
+			const expected = [join(userExtDir, "user.ts"), "builtin:search"];
+
+			await loader.reload({ resolveProjectTrust: async () => true });
+			expect(loader.getExtensions().extensions.map((extension) => extension.path)).toEqual(expected);
+			await loader.reload();
+			expect(loader.getExtensions().extensions.map((extension) => extension.path)).toEqual(expected);
+		});
+
+		it("should disable built-in extensions with noExtensions unless loaded with -e builtin:<name>", async () => {
+			const loaded: string[] = [];
+			const loader = new DefaultResourceLoader({
+				cwd,
+				agentDir,
+				noExtensions: true,
+				additionalExtensionPaths: ["builtin:search", "builtin:missing"],
+				extensionFactories: [
+					{ name: "search", builtin: true, factory: () => void loaded.push("search") },
+					{ name: "llama", builtin: true, factory: () => void loaded.push("llama") },
+				],
+			});
+			await loader.reload();
+
+			expect(loader.getExtensions().extensions.map((extension) => extension.path)).toEqual(["builtin:search"]);
+			expect(loader.getExtensions().errors).toEqual([
+				{ path: "builtin:missing", error: "Unknown built-in extension: builtin:missing" },
+			]);
+			expect(loaded).toEqual(["search"]);
+		});
+
+		it("should apply project built-in extension overrides after trust resolves", async () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ extensions: ["-builtin:search"] }));
+			mkdirSync(join(cwd, ".pi"), { recursive: true });
+			writeFileSync(
+				join(cwd, ".pi", "settings.json"),
+				JSON.stringify({ extensions: ["+builtin:search", "-builtin:llama"] }),
+			);
+			const loaded: string[] = [];
+			const loader = new DefaultResourceLoader({
+				cwd,
+				agentDir,
+				extensionFactories: [
+					{ name: "search", builtin: true, factory: () => void loaded.push("search") },
+					{ name: "plain", factory: () => void loaded.push("plain") },
+					{ name: "llama", builtin: true, factory: () => void loaded.push("llama") },
+				],
+			});
+			await loader.reload({
+				resolveProjectTrust: async ({ extensionsResult }) => {
+					// Built-in extensions wait until project settings are known.
+					expect(extensionsResult.extensions.map((extension) => extension.path)).toEqual(["<inline:plain>"]);
+					return true;
+				},
+			});
+
+			expect(loader.getExtensions().extensions.map((extension) => extension.path)).toEqual([
+				"builtin:search",
+				"<inline:plain>",
+			]);
+			expect(loaded).toEqual(["plain", "search"]);
+		});
 	});
 
 	describe("loadProjectContextFiles - nested worktree dedup", () => {
@@ -1075,6 +1221,29 @@ export default function(pi: ExtensionAPI) {
 			const files = loadProjectContextFiles({ cwd: worktreeSrc, agentDir });
 
 			expect(files.map((f) => f.content)).toEqual(["worktree instructions"]);
+		});
+
+		// https://github.com/earendil-works/pi/issues/10681
+		it("should load the worktree's context once when it symlinks to the main repo's file", () => {
+			const { main, worktree, worktreeSrc } = setupNestedWorktree();
+			writeFileSync(join(main, "AGENTS.md"), "main repo instructions");
+			symlinkSync(join(main, "AGENTS.md"), join(worktree, "AGENTS.md"));
+
+			const files = loadProjectContextFiles({ cwd: worktreeSrc, agentDir });
+
+			expect(files.map((f) => f.path)).toEqual([join(worktree, "AGENTS.md")]);
+		});
+
+		it("should skip the main repo's duplicate when the main repo's file is a symlink", () => {
+			const { outer, main, worktree, worktreeSrc } = setupNestedWorktree();
+			const shared = join(outer, "shared-agents.md");
+			writeFileSync(shared, "shared instructions");
+			symlinkSync(shared, join(main, "AGENTS.md"));
+			symlinkSync(shared, join(worktree, "AGENTS.md"));
+
+			const files = loadProjectContextFiles({ cwd: worktreeSrc, agentDir });
+
+			expect(files.map((f) => f.path)).toEqual([join(worktree, "AGENTS.md")]);
 		});
 
 		it("should still inherit the main repo's context when the worktree root has none", () => {

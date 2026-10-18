@@ -60,6 +60,7 @@ Start long-lived resources from `session_start` or from the command or tool that
 Close session-scoped resources from an idempotent `session_shutdown` handler.
 
 A run proceeds from input and `before_agent_start`, through model, message, and tool events, to `agent_end`.
+Pi counts as busy while a run starts, including the compaction check and `before_agent_start`, so messages sent meanwhile go into the starting run.
 Automatic retries, recovery, compaction, or queued work can continue afterward.
 <a id="agent_start--agent_end--agent_before_settle--agent_settled"></a>
 
@@ -99,7 +100,7 @@ Use each event’s declared result type rather than assuming every return value 
 
 Events cover resource discovery, sessions, agent and message lifecycle, providers, tools, and raw input.
 
-`before_agent_start` exposes both the current prompt and its structured `systemPromptOptions`. Prefer changing prompt sections, selected tools, or guidelines so Pi can append a transcript delta. Returning `systemPrompt`, or setting `forceSystemPrompt`, replaces the whole prompt for that run while the transcript continues recording the structured sections. Providers receive the forced text as their leading system prompt.
+`before_agent_start` exposes both the current prompt and its structured `systemPromptOptions`. `event.messageType` says what started the run: `"user"` for a prompt or `pi.sendUserMessage()`, with `prompt` and `images`; `"custom"` for `pi.sendMessage(..., { triggerTurn: true })`, with the starting `message` and no `prompt`. A returned `message` is added to either kind of run; check `messageType` to skip runs started by custom messages. Prefer changing prompt sections, selected tools, or guidelines so Pi can append a transcript delta. Returning `systemPrompt`, or setting `forceSystemPrompt`, replaces the whole prompt for that run while the transcript continues recording the structured sections. Providers receive the forced text as their leading system prompt.
 
 `message_end` can replace a finalized message while preserving its role. `tool_call` can mutate input or block execution. `tool_result` handlers compose, with each handler seeing prior changes.
 
@@ -142,13 +143,38 @@ Use sequential execution when tools share mutable in-memory state.
 File-mutating tools should wrap the complete read-modify-write operation with `withFileMutationQueue()`.
 Truncate large model-facing results and tell the model where to read the complete output.
 
+Declare `outputSchema` and return a matching `structuredContent` when the result is data. The model still receives `content`; programmatic callers can receive `structuredContent` instead of the text. To report a failure that still carries data, return the result with `isError: true` instead of throwing: the model sees an error, while programmatic callers still receive `structuredContent`.
+
+A tool can run other tools with `ctx.executeTool(name, args, { signal, onUpdate })`. Nested calls go through argument validation and the `tool_call` and `tool_result` handlers like model-issued calls, and emit `tool_execution_start`, `tool_execution_update`, and `tool_execution_end`; all of these events carry `parentToolCallId`, and their `toolCallId` is assigned by pi as `<parent id>/<n>`. These ids do not appear as tool calls or tool results in the transcript. Nested calls do not add transcript entries: their results only reach the calling tool, which reports them itself, for example through `onUpdate` and `details`. The session keeps a bounded record of them (name, arguments, status, duration, error; never results) as `nestedCalls` on the calling tool's result message. It is used for compaction file lists and shown in HTML exports. Arguments over 8 KiB per call or 32 KiB per tool result are omitted, at most 256 calls are kept, and `complete: false` marks a record that lost anything. The `usage` of nested results, at every depth, is added to the calling tool's result `usage`, so a tool reports only its own usage, not that of the tools it called. `ctx.tools` lists the tools `ctx.executeTool()` can call. `tool_result` handlers that redact `content` should also replace `structuredContent`; replacing only `content` drops it.
+
 See [`hello.ts`](../examples/extensions/hello.ts), [`todo.ts`](../examples/extensions/todo.ts), [`dynamic-tools.ts`](../examples/extensions/dynamic-tools.ts), and [`truncated-tool.ts`](../examples/extensions/truncated-tool.ts).
+
+### Tool exposure
+
+`exposure` controls how the model reaches a tool. Tools callable by other tools can be invoked through `ctx.executeTool()` (`ctx.tools`):
+
+- `direct` (default): declared to the model while active, and callable while active.
+- `model-only`: declared to the model while active, never callable. Use it for tools that orchestrate other tools or ask the user.
+- `deferred`: callable whenever registered, but not declared until `tool_search` finds and activates it.
+- `hidden`: registered but unreachable. Re-register a tool with `exposure: "hidden"` to withdraw it, since tools cannot be unregistered.
+
+`namespace: { name, aliases, description, instructions }` groups related tools. `tool_search` ranks the namespace description with its tools. `instructions` holds longer usage guidance for an orchestrating tool. `aliases` are other names that can refer to the namespace, such as `docs` for a namespace named `documentation`.
+
+Registering a `direct` or `model-only` tool activates it; the other exposures are not activated on registration. The active set (`pi.getActiveTools()`, `pi.setActiveTools()`) is the set of tools declared to the model. `pi.getAllTools()` reports each tool's `exposure`, `namespace`, and `reachesTools`.
+
+A tool that orchestrates other tools can adjust what the model sees while it is active with `prepareLoadout(loadout)`. It runs whenever the active tools change and receives the declared tools, the callable tools, and every registered tool with its exposure, namespace, and prompt guidelines. It returns replacement `descriptions` for declared tools (including its own) and `hiddenDeclarations`: active tools whose declarations requests leave out while they stay active and callable. The default system prompt leaves hidden tools out of its tool list and rules, and names no tool in the skills hint when the file reader is hidden, so the orchestrating tool should present their guidelines itself.
+
+A tool that reaches other tools declares which ones a call may reach with `reachesTools(input)`: `"all"`, or the words of the input that may name them, where a word refers to every tool or namespace whose name it contains. `tool_search` always returns `"all"`. Extensions that register tools late can use `reachesTools` from their `tool_call` handler to finish registering the tools a call needs before it runs.
 
 ### Activate tools dynamically
 
 Register every tool first, keep optional tools inactive, and use `pi.setActiveTools()` from a loader tool to select the desired active tools. Names must already be registered; unknown names are ignored.
 
 Pi records the initial prompt and tool set in the transcript's first system message, then appends tool and prompt changes before the next model request. Providers that cannot represent the transition receive a complete transcript checkpoint, which can invalidate the cached prefix.
+
+### Tool rendering
+
+A tool's `renderCall` and `renderResult` draw its calls in the interactive transcript and in HTML exports. `pi.registerToolRenderer((toolName, next) => renderers)` chooses renderers for calls to any tool, including tools that are not registered yet, such as dynamically loaded extension tools. `next()` returns what the remaining resolvers (in extension load order), then the registered tool, would use, so `next() ?? mine` only fills in.
 
 <a id="extensioncontext"></a>
 <a id="extensioncommandcontext"></a>

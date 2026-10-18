@@ -1,7 +1,15 @@
 import type { AttachedReplicatedState, Context, Draft, JsonValue } from "@earendil-works/chord";
 import type { Op } from "@earendil-works/chord/delta";
 import type { Message, Models } from "@earendil-works/pi-ai";
-import type { RegistrySnapshot } from "./harness/types.ts";
+import type { ExecutionEnv } from "./env/index.ts";
+import type {
+	Agent,
+	ContextView,
+	ConversationHandle,
+	RegistrySnapshot,
+	Settings,
+	SettledTask,
+} from "./harness/types.ts";
 
 /** JSON object used as the root of every durable document. */
 export type JsonObject = { [key: string]: JsonValue };
@@ -130,8 +138,11 @@ export type RunningTask<I, S, R> = TaskRecord<I, S, R> & {
 	readonly state: Extract<TaskState<S, R>, { readonly status: "running" }>;
 };
 
-/** Next state a task commits for itself: a replacement checkpoint or its terminal outcome. */
-export type NextTaskState<S, R> = Extract<TaskState<S, R>, { readonly status: "running" | "terminal" }>;
+/**
+ * Next state a task commits for itself: a replacement checkpoint, a wait, or its outcome. A returned `terminal` state is
+ * stored as `completing` while ordinary owned work below the task is live (spec §5.5).
+ */
+export type NextTaskState<S, R> = Extract<TaskState<S, R>, { readonly status: "running" | "waiting" | "terminal" }>;
 
 /**
  * Runs one checkpoint phase. It must commit a changed checkpoint or a terminal outcome through `runtime.commit()`;
@@ -143,24 +154,44 @@ export type PhaseHandler<I, P, S, R, H extends object> = (
 	context: Context,
 ) => Promise<void>;
 
+/** Dispatches one hook of a task to every matching registered handler, in registry order of the phase snapshot. */
+export interface HookRunner<H extends object> {
+	/**
+	 * Call `invoke` with each matching handler named `name`. An ordinary throw from `invoke` is reported and the next
+	 * handler runs; once the invocation is signalled, the error propagates. Composition happens inside `invoke`.
+	 */
+	each<K extends keyof H>(name: K, invoke: (handler: NonNullable<H[K]>) => void | Promise<void>): Promise<void>;
+}
+
 /**
  * Operations of one task invocation. Every operation rejects after the invocation ends; watches acquired through it
- * stop at invocation end. `_H` is the task's hook map, consumed once the runtime gains its hook runner.
+ * stop at invocation end.
  */
-export interface TaskRuntime<I, S, R, _H extends object> extends DocumentObserver {
+export interface TaskRuntime<I, S, R, H extends object> extends DocumentObserver, DocumentReader {
 	readonly taskId: TaskId<R>;
 	readonly conversationId: ConversationId;
-	/** Aborted when the run is signalled by `abortTask()` or the Harness closes. */
+	/**
+	 * Aborted when the run is signalled by `abortTask()`, the Harness closes, or the invocation ends. Work still using it
+	 * after the invocation ended, such as a detached wait, is cancelled; it could not write anything anyway.
+	 */
 	readonly signal: AbortSignal;
 	/** Registry snapshot of the current phase; refreshed at every phase boundary. */
 	readonly registry: RegistrySnapshot;
+	/** The task's conversation's agent, resolved at most once per phase, at first use, and fixed for the phase. */
+	agent(context: Context): Promise<Agent>;
+	/** `HarnessOptions.settings`, resolved at each access. */
+	readonly settings: Settings;
 	readonly models: Models;
+	/** Calls `HarnessOptions.env` for the task's conversation; rejects with its error. */
+	env(context: Context): Promise<ExecutionEnv | undefined>;
+	/** Handlers of this task's name from the extensions its conversation selects, in extension order. */
+	readonly hooks: HookRunner<H>;
 
 	/**
 	 * Commit on the Session line after rereading the task. Rejects when the task is terminal, the invocation ended, the
 	 * Harness is closing, or, in a run invocation, the task carries an abort mark. A returned state replaces the task's
 	 * state in the same commit; returning nothing leaves it unchanged. `tx.createTask()` defaults to the task's
-	 * conversation.
+	 * conversation. Inside the callback read only through `tx`: `snapshot()`, `documentState()`, `watchDoc()`, `getTask()`, and the other Session and runtime reads may queue on the line the callback holds, and then never resolve.
 	 */
 	commit(
 		change: (
@@ -173,6 +204,37 @@ export interface TaskRuntime<I, S, R, _H extends object> extends DocumentObserve
 	memo<T extends JsonValue>(name: string, context: Context): Promise<T | undefined>;
 	/** Store `candidate` unless a memo already exists; return the durable winner. */
 	memo<T extends JsonValue>(name: string, candidate: T, context: Context): Promise<T>;
+	/** Committed task record. */
+	getTask<T>(id: TaskId<T>, context: Context): Promise<TaskRecord<JsonValue, JsonValue, T> | undefined>;
+	/** Resolve with the task's terminal receipt; rejects when the invocation ends. */
+	waitForTask<T>(id: TaskId<T>, context: Context): Promise<SettledTask<T>>;
+	/**
+	 * Abort a task this task owns, as `Harness.abortTask()` does, and resolve once it is terminal. Rejects for a task
+	 * another owns; resolves at once for a terminal one.
+	 */
+	abortOwned(id: TaskId, context: Context): Promise<void>;
+	/**
+	 * Live tasks this task owns directly, in ID order: also those an earlier invocation created, before a restart. Tasks
+	 * in conversations it owns are not included. Copies of the committed records.
+	 */
+	ownedTasks(context: Context): Promise<TaskRecord<JsonValue, JsonValue, JsonValue>[]>;
+	/** Outcomes of terminal tasks, in order; rejects when one is missing or not terminal. Used after a wait. */
+	outcomes<T>(ids: readonly TaskId<T>[], context: Context): Promise<TaskOutcome<T>[]>;
+	/**
+	 * Invocation-bound handle of an existing conversation, for example one this task owns; `undefined` when absent. Its
+	 * operations and the submissions it returns reject after the invocation ends; admitted work stays durable.
+	 */
+	conversation(id: ConversationId, context: Context): Promise<ConversationHandle | undefined>;
+	/** Committed entry visible from the task's conversation. */
+	entry(id: EntryId, context: Context): Promise<EntryRecord | undefined>;
+	/** Undefined when the entry is absent, not visible, or has another kind. */
+	entry<D extends JsonValue>(token: Entry<D>, id: EntryId, context: Context): Promise<TypedEntry<D> | undefined>;
+	/** Committed raw active transcript and model context, optionally cut off at the visible entry `at`. */
+	context(conversationId: ConversationId, context: Context, options?: { readonly at?: EntryId }): Promise<ContextView>;
+	/** The Harness clock. */
+	now(): number;
+	/** Forward a non-fatal failure to `HarnessOptions.onReport`. */
+	report(error: unknown): void;
 	/** Resolve once the Harness clock reaches `until`; rejects when the invocation or `context` is cancelled. */
 	sleep(until: number, context: Context): Promise<void>;
 }
@@ -208,14 +270,29 @@ export interface Task<I, S extends { phase: string }, R, H extends object> {
 	readonly definition: TaskDefinition<I, S, R, H>;
 }
 
+/** Who owns a task: its conversation (a top-level task) or another task of the same conversation (a child task). */
+export type TaskOwnership = { readonly kind: "conversation" } | { readonly kind: "task"; readonly taskId: TaskId };
+
+/** How a waiting task treats the tasks it waits on (spec §5.5). */
+export type JoinPolicy = "failFast" | "allSettled";
+
 /** Creation options for a durable task. */
 export type TaskOptions = {
-	/** Owning conversation; required for Session commits that are not bound to a conversation. */
+	/** Required: a task always names its owner (spec §5.5). */
+	readonly ownership: TaskOwnership;
+	/**
+	 * Default: the owner task's conversation, or the transaction's bound conversation; required for conversation-owned
+	 * tasks created by Session commits that are not bound to a conversation.
+	 */
 	readonly conversationId?: ConversationId;
-	/** Tasks that must be terminal before ordinary execution may begin. */
-	readonly after?: readonly TaskId[];
-	/** Excluded from ordinary idle waits and conversation aborts. */
+	/** Conversation-owned tasks only: excluded from ordinary idle waits, conversation aborts, and cascades. */
 	readonly background?: boolean;
+	/**
+	 * Its creator awaits it only in memory and does not resume after a restart, so it is pointless once the Harness that
+	 * created it is gone. When scheduling starts in a later Harness, the task, if still live, is abort-marked with reason
+	 * `restart`, and the mark cascades to its ordinary owned work, before any of it runs again.
+	 */
+	readonly abandonOnRestart?: boolean;
 };
 
 /** Ownership selected explicitly whenever a conversation is created. */
@@ -276,6 +353,20 @@ export type EntryDraft = Omit<EntryRecord, "id" | "conversationId" | "byTaskId" 
 	readonly head?: EntryId | "self";
 };
 
+/** Entry whose `data` has type `D`; `never` means the kind carries no data. */
+export type TypedEntry<D extends JsonValue> = Omit<EntryRecord, "data"> &
+	([D] extends [never] ? { readonly data?: never } : { readonly data: D });
+
+/** Entry content of a typed kind; the token supplies `kind`. */
+export type TypedEntryDraft<D extends JsonValue> = Omit<EntryDraft, "kind" | "data"> &
+	([D] extends [never] ? { readonly data?: never } : { readonly data: D });
+
+/** Typed entry kind with a narrowing guard. */
+export interface Entry<D extends JsonValue = never> {
+	readonly kind: string;
+	is(entry: EntryRecord | undefined): entry is TypedEntry<D>;
+}
+
 /** Identity fields shared by every durable submission state. */
 type SubmissionRecordBase = {
 	readonly id: SubmissionId;
@@ -298,7 +389,7 @@ export type SubmissionRecord =
 						readonly detail?: never;
 				  }
 				| {
-						/** Added to the transcript and owned by an active turn. */
+						/** Added to the transcript and owned by an active run. */
 						readonly status: "placed";
 						readonly entry: EntryId;
 						readonly answer?: never;
@@ -350,6 +441,11 @@ export type SubmissionRecord =
 						readonly detail?: JsonValue;
 				  }
 			));
+
+/** Terminal status staged for a submission; identity, type, and entry come from its current record. */
+export type SubmissionSettlement =
+	| { readonly status: "done"; readonly answer: EntryId }
+	| { readonly status: "unanswered"; readonly reason: string; readonly detail?: JsonValue };
 
 /** Submission fields supplied before the Session assigns an ID. */
 export type SubmissionCreate = SubmissionRecord extends infer Record
@@ -405,7 +501,7 @@ export type TaskOutcome<R> =
 /** Complete durable execution state of a task. */
 export type TaskState<S, R> =
 	| {
-			/** Eligible for scheduling when its dependencies are terminal. */
+			/** Eligible for scheduling. */
 			readonly status: "pending";
 			/** Complete durable state from which execution resumes. */
 			readonly checkpoint: S;
@@ -417,6 +513,20 @@ export type TaskState<S, R> =
 			/** Complete durable state from which execution resumes. */
 			readonly checkpoint: S;
 			readonly outcome?: never;
+	  }
+	| {
+			/** Parked without an invocation until every task in `on` is terminal; then resumes at `checkpoint`. */
+			readonly status: "waiting";
+			readonly checkpoint: S;
+			readonly on: readonly TaskId[];
+			readonly policy: JoinPolicy;
+			readonly outcome?: never;
+	  }
+	| {
+			/** Outcome decided; becomes terminal once no ordinary owned work below is live. Runs no more code. */
+			readonly status: "completing";
+			readonly checkpoint?: never;
+			readonly outcome: TaskOutcome<R>;
 	  }
 	| {
 			/** Permanently settled durable result receipt. */
@@ -435,24 +545,40 @@ type TaskRecordBase<I, R> = {
 	readonly version: number;
 	/** Original task input retained while the task is live or terminal. */
 	readonly input: I;
-	/** Tasks that must be terminal before ordinary execution may begin. */
-	readonly after: readonly TaskId[];
-	/** Whether this task is excluded from ordinary idle waits and conversation aborts. */
+	/** Owning task of a child task; absent for a task its conversation owns. Immutable. */
+	readonly owner?: TaskId;
+	/** Whether this conversation-owned task is excluded from ordinary idle waits, conversation aborts, and cascades. */
 	readonly background: boolean;
 	/** Durable abort mark checked before run-mode progress is committed. */
 	readonly abortRequested: boolean;
+	/**
+	 * Why the mark was set when not by an abort request: `restart` for a task abandoned after a restart
+	 * (`TaskOptions.abandonOnRestart`) or below one. Such a task waits for its definition instead of becoming `orphaned`.
+	 * A later abort request clears it.
+	 */
+	readonly abortReason?: "restart";
+	/** Set from `TaskOptions.abandonOnRestart`. Immutable. */
+	readonly abandonOnRestart?: true;
+	/**
+	 * Wall-clock milliseconds of the first change to `running`, stamped by the Session. Kept through waits and recovery,
+	 * so the span to `endedAt` includes them. Absent before the task first runs, and on records written by earlier
+	 * versions.
+	 */
+	readonly startedAt?: number;
+	/** Wall-clock milliseconds of the change to `terminal`, stamped by the Session; absent while live. */
+	readonly endedAt?: number;
 };
 
 /** Complete replacement record for one durable task state machine. */
 export type TaskRecord<I, S, R> = TaskRecordBase<I, R> &
 	(
 		| {
-				readonly state: Extract<TaskState<S, R>, { readonly status: "pending" | "running" }>;
-				/** Small first-writer-wins values retained while the task is live. */
+				readonly state: Extract<TaskState<S, R>, { readonly status: "pending" | "running" | "waiting" }>;
+				/** Small first-writer-wins values retained while the task can run. */
 				readonly memos?: Readonly<Record<string, JsonValue>>;
 		  }
 		| {
-				readonly state: Extract<TaskState<S, R>, { readonly status: "terminal" }>;
+				readonly state: Extract<TaskState<S, R>, { readonly status: "completing" | "terminal" }>;
 				readonly memos?: never;
 		  }
 	);
@@ -509,31 +635,51 @@ export type Page<T, C> = {
 	readonly next?: C;
 };
 
-/** Backend-owned JSON continuation state that callers only round-trip to the same scan. */
+/**
+ * Backend-owned JSON continuation state that callers only round-trip to the same scan. It carries the scan's order: a
+ * scan given a cursor continues in that order, and rejects a different `order` in its query.
+ */
 export type Cursor = Readonly<Record<string, JsonValue>>;
+
+/** ID order of a scan: `ascending` is oldest first, `descending` newest first. */
+export type ScanOrder = "ascending" | "descending";
 
 /** Optional filters for an ordered conversation scan. */
 export type ConversationQuery = {
 	readonly ownerConversationId?: ConversationId;
 	readonly ownerTaskId?: TaskId;
+	/** Default `ascending`; with a cursor, the cursor's order. */
+	readonly order?: ScanOrder;
 };
 
-/** Inclusive ID bounds for a newest-first scan of one conversation's fork-aware history. */
+/** Inclusive ID bounds for a scan of one conversation's fork-aware history. */
 export type EntryQuery = {
 	readonly conversationId: ConversationId;
 	/** Oldest entry ID that may be returned. */
 	readonly minEntryId?: EntryId;
 	/** Newest entry ID that may be returned. */
 	readonly maxEntryId?: EntryId;
+	/** Default `descending`; with a cursor, the cursor's order. */
+	readonly order?: ScanOrder;
 };
 
 /** Optional filters for an ordered scan of durable task records. */
 export type TaskQuery = {
 	readonly conversationId?: ConversationId;
 	readonly kind?: string;
-	readonly status?: "pending" | "running" | "terminal";
+	readonly status?: TaskState<JsonValue, JsonValue>["status"];
 	readonly abortRequested?: boolean;
 	readonly background?: boolean;
+	/** Default `ascending`; with a cursor, the cursor's order. */
+	readonly order?: ScanOrder;
+};
+
+/** Optional filters for an ordered scan of submission records. */
+export type SubmissionQuery = {
+	readonly conversationId?: ConversationId;
+	readonly status?: SubmissionRecord["status"];
+	/** Default `ascending`; with a cursor, the cursor's order. */
+	readonly order?: ScanOrder;
 };
 
 /** Current state or one historical commit sequence used for document membership and content reads. */
@@ -644,6 +790,8 @@ export type CommitPublication = {
 export interface Tx {
 	conversation(id: ConversationId): Promise<ConversationRecord | undefined>;
 	entry(id: EntryId): Promise<EntryRecord | undefined>;
+	/** Undefined when the entry is absent or has another kind. */
+	entry<D extends JsonValue>(token: Entry<D>, id: EntryId): Promise<TypedEntry<D> | undefined>;
 	task(id: TaskId): Promise<TaskRecord<JsonValue, JsonValue, JsonValue> | undefined>;
 	scanConversations(
 		query: ConversationQuery,
@@ -651,11 +799,15 @@ export interface Tx {
 		cursor?: Cursor,
 	): Promise<Page<ConversationRecord, Cursor>>;
 	scanEntries(query: EntryQuery, limit: number, cursor?: Cursor): Promise<Page<EntryRecord, Cursor>>;
+	/** Newest visible entry of the conversation that carries a `head`. */
+	latestHeadMarker(conversationId: ConversationId): Promise<(EntryRecord & { readonly head: EntryId }) | undefined>;
 	scanTasks(
 		query: TaskQuery,
 		limit: number,
 		cursor?: Cursor,
 	): Promise<Page<TaskRecord<JsonValue, JsonValue, JsonValue>, Cursor>>;
+	/** Committed submission with a conversation-scoped request ID. */
+	submissionByRequest(conversationId: ConversationId, requestId: string): Promise<SubmissionRecord | undefined>;
 
 	/** Create a conversation with explicitly selected ownership. */
 	createConversation(options: { readonly ownership: ConversationOwnership }): Promise<ConversationRecord>;
@@ -667,11 +819,33 @@ export interface Tx {
 	): Promise<ConversationRecord>;
 	/** Returned records are Session-owned immutable values and may be shared with commit listeners. */
 	appendEntry(conversationId: ConversationId, value: EntryDraft): Promise<EntryRecord>;
+	/** The token supplies `kind` and types `data`. */
+	appendEntry<D extends JsonValue>(
+		token: Entry<D>,
+		conversationId: ConversationId,
+		value: TypedEntryDraft<NoInfer<D>>,
+	): Promise<TypedEntry<D>>;
 	createTask<I, S extends { phase: string }, R, H extends object>(
 		task: Task<I, S, R, H>,
 		input: I,
-		options?: TaskOptions,
+		options: TaskOptions,
 	): Promise<TaskId<R>>;
+	/**
+	 * Create a raw submission record with a fresh ID. No admission rules apply: no busy check, no inbox queueing, no
+	 * placement. Use `Conversation.submit()` or a conversation handle unless the caller implements admission itself.
+	 */
+	createSubmission(create: SubmissionCreate): Promise<SubmissionRecord>;
+	/**
+	 * Settle a queued or placed submission; only a placed input can be answered, and a settled submission stays
+	 * unchanged. Resolved against this transaction's latest record of the submission, so it works after table writes.
+	 * Run tasks settle the inputs they answer.
+	 */
+	settleSubmission(id: SubmissionId, settlement: SubmissionSettlement): void;
+	/**
+	 * Place a queued submission at `entry`: an input becomes `placed`, a write `done`. Resolved like
+	 * `settleSubmission()`. Inbox boundaries place the submissions they select.
+	 */
+	placeSubmission(id: SubmissionId, entry: EntryId): void;
 
 	doc<T extends JsonObject>(token: SessionDocToken<T>): Promise<Draft<T>>;
 	doc<T extends JsonObject>(token: ConversationDocToken<T>, conversationId: ConversationId): Promise<Draft<T>>;
@@ -716,7 +890,9 @@ export type DocumentState<T extends JsonObject> = AttachedReplicatedState<Readon
 /** Terminal result of one document watch. */
 export type WatchEnd =
 	| { readonly reason: "stopped" | "cancelled" | "session_closed" | "retired" }
-	| { readonly reason: "listener_error"; readonly error: Error };
+	| { readonly reason: "listener_error"; readonly error: Error }
+	/** The Session failed; `error` is what failed it, usually a storage error (see `SessionFailed`). */
+	| { readonly reason: "session_failed"; readonly error: unknown };
 
 /** Serialized exact-frame observation of an immutable value with bounded pending delivery. */
 export interface WatchHandle<T> {
@@ -731,6 +907,9 @@ export interface WatchHandle<T> {
 }
 
 export type DocumentWatch<T extends JsonObject> = WatchHandle<Readonly<T> | null>;
+
+/** Committed document reads. */
+export type DocumentReader = Pick<Session, "snapshot" | "snapshotAsOf">;
 
 /** Non-creating document watch acquisition shared by Session and later invocation APIs. */
 export interface DocumentObserver {
@@ -764,15 +943,28 @@ export interface DocumentObserver {
 	): Promise<DocumentWatch<T> | undefined>;
 }
 
+/** Why a Session ended: `close()`, or a failed Storage call, whose error it carries. */
+export type SessionEnd = { readonly reason: "closed" } | { readonly reason: "failed"; readonly error: unknown };
+
 /** Owner of one mutation line, its records, and its tracked documents. */
 export interface Session extends DocumentObserver {
-	/** Run one atomic transaction on the Session mutation line. */
+	/**
+	 * Run one atomic transaction on the Session mutation line. Inside the callback read only through `tx`: `snapshot()`, `documentState()`, `watchDoc()`, `getTask()`, and the other Session and runtime reads may queue on the line the callback holds, and then never resolve.
+	 */
 	commit<T>(change: (tx: Tx) => T | Promise<T>, context: Context): Promise<T>;
 	/** Seal admission, settle admitted commits, then close storage. */
 	close(context: Context): Promise<void>;
-	/** Observe complete commits synchronously after adoption. The listener must not throw, block, or call Session APIs. */
+	/**
+	 * Settles once the Session has closed, Storage included: after `close()`, or after the first failed Storage call,
+	 * which closes the Session itself. A failed Session is reopened from Storage; nothing else is left to clean up.
+	 */
+	readonly closed: Promise<SessionEnd>;
+	/** Observe complete commits synchronously after adoption. The listener must not block or call Session APIs. */
 	subscribeCommits(listener: (publication: CommitPublication, context: Context) => void): () => void;
-	/** Observe close synchronously when it begins. The listener must not throw, block, or call Session APIs. */
+	/**
+	 * Observe close synchronously when it begins, also when a failed Storage call closes the Session. The listener must
+	 * not block or call Session APIs.
+	 */
 	subscribeClose(listener: () => void): () => void;
 
 	snapshot<T extends JsonObject>(token: SessionDocToken<T>, context: Context): Promise<Readonly<T> | undefined>;
@@ -858,6 +1050,11 @@ export interface Session extends DocumentObserver {
  * ancestry, and transitions. Implementations enforce atomicity, global ID ownership,
  * immutable conversation/entry creation, document record consistency, and detached values;
  * Session serializes commits.
+ *
+ * An error a method throws is final: it fails the Session, which nothing retries, so retry transient failures inside
+ * the method. Two errors of a read fail only that read: a `StorageRequestError` for an invalid request (an unknown
+ * conversation, a foreign or malformed cursor, history a document does not keep), which must have no durable effect, and a
+ * rejection because its caller's context was aborted. Any error from `commit()` or `mintId()` is fatal.
  */
 export interface Storage {
 	/**
@@ -865,13 +1062,16 @@ export interface Storage {
 	 */
 	commit(writes: readonly StorageWrite[], context: Context): Promise<Seq>;
 
-	/** Return a fresh branded candidate from the Session-global numeric ID namespace. */
+	/**
+	 * Return a fresh branded candidate from the Session-global numeric ID namespace, greater than every ID minted or stored
+	 * before, also across reopen: scans order by ID as creation order, and the Harness relies on it.
+	 */
 	mintId<I extends Id<string>>(): Promise<I>;
 
 	/** Look up one conversation by exact ID. */
 	conversation(id: ConversationId, context: Context): Promise<ConversationRecord | undefined>;
 
-	/** Scan conversations in ascending ID order. */
+	/** Scan conversations in `query.order` (default ascending) by ID. */
 	scanConversations(
 		query: ConversationQuery,
 		limit: number,
@@ -898,7 +1098,7 @@ export interface Storage {
 		context: Context,
 	): Promise<(EntryRecord & { readonly head: EntryId }) | undefined>;
 
-	/** Scan the inclusive visible range newest-first, returning at most `limit` entries. */
+	/** Scan the inclusive visible range in `query.order` (default descending), returning at most `limit` entries. */
 	scanEntries(
 		query: EntryQuery,
 		limit: number,
@@ -909,7 +1109,7 @@ export interface Storage {
 	/** Look up the latest complete record for one task. */
 	task(id: TaskId, context: Context): Promise<TaskRecord<JsonValue, JsonValue, JsonValue> | undefined>;
 
-	/** Scan task records matching every supplied filter. */
+	/** Scan task records matching every supplied filter in `query.order` (default ascending) by ID. */
 	scanTasks(
 		query: TaskQuery,
 		limit: number,
@@ -919,6 +1119,14 @@ export interface Storage {
 
 	/** Look up the latest complete record for one admitted submission. */
 	submission(id: SubmissionId, context: Context): Promise<SubmissionRecord | undefined>;
+
+	/** Scan submissions matching every supplied filter in `query.order` (default ascending) by ID. */
+	scanSubmissions(
+		query: SubmissionQuery,
+		limit: number,
+		cursor: Cursor | undefined,
+		context: Context,
+	): Promise<Page<SubmissionRecord, Cursor>>;
 
 	/** Find a submission by its conversation-scoped host deduplication key. */
 	submissionByRequest(

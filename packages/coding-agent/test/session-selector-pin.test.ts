@@ -82,7 +82,7 @@ describe("session selector pins", () => {
 		let output = stripAnsi(selector.render(120).join("\n"));
 		expect(output).toContain("ctrl+p pin");
 		expect(output).not.toContain("path (on)");
-		expect(output).not.toContain("path (off)");
+		expect(output).toContain("shift+ctrl+p path (off)");
 		expect(output.indexOf("Older pinned")).toBeLessThan(output.indexOf("Newer regular"));
 		expect(output).toContain("◆ Older pinned");
 		expect(selector.getSessionList().getSelectedSessionPath()).toBe(olderPath);

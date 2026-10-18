@@ -1,61 +1,152 @@
-Hi :)
+<p align="center">
+  <a href="https://pi.dev">
+    <img alt="pi logo" src="https://pi.dev/logo-auto.svg" width="128">
+  </a>
+</p>
+<p align="center">
+  <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
+</p>
 
-This is my fork of Pi. I created it because I thought the features I'm thinking of might be too niche and not make it too the official Pi, and also because those features can't be implemented as an extension, and need a source patch.
+# Pi
 
-> Fork based on upstream Pi v0.87.1
+Pi is a minimal, extensible agent harness that you can make your own.
 
-## Features I Have Implemented
+Adapt Pi to your workflows, not the other way around. Customize Pi with [extensions](packages/coding-agent/docs/extensions.md), [skills](packages/coding-agent/docs/skills.md), [prompt templates](packages/coding-agent/docs/prompt-templates.md), and [themes](packages/coding-agent/docs/themes.md). Bundle them as [Pi packages](packages/coding-agent/docs/packages.md) and share via npm or git.
 
-### 1. A "Worked For" Time Line
+Pi ships with powerful defaults but skips features like sub-agents and plan mode. Ask Pi to build what you want, or install a package that does it your way.
 
-This was inspired by Codex. It shows this:
+Use Pi [interactively](packages/coding-agent/docs/usage.md), automate it in [print or JSON mode](packages/coding-agent/docs/cli.md), control it over [RPC](packages/coding-agent/docs/rpc.md), or build apps with the [Pi TypeScript SDK](packages/coding-agent/docs/sdk.md). See [OpenClaw](https://github.com/OpenClaw/OpenClaw) for a real-world integration.
 
-<img width="762" height="369" alt="image" src="https://github.com/user-attachments/assets/06869672-9b48-41dd-aa81-354c25f44a66" />
+## Getting started
 
+This fork does not publish npm packages or binary releases. Follow the [quickstart](packages/coding-agent/docs/quickstart.md) to install dependencies and run Pi from a source checkout.
 
-I mirrored it in Pi, and it now shows like this:
+## Run with Nix
 
-<img width="762" height="497" alt="image" src="https://github.com/user-attachments/assets/f57bea84-686f-4946-b76c-9acddc01fc07" />
+```bash
+nix run .
+```
 
-See https://github.com/atharva-again/pi/pull/1 for the PR that implemented this.
+Nix builds Pi from this checkout. Use `nix build .` to build without running it.
 
-### 2. Bi-directional Thinking Toggle
+Nix builds use the model catalog revision pinned in `nix/model-catalog.json`. To refresh the pin by hand:
 
-This was also inspired by Codex. It was implemented in https://github.com/atharva-again/pi/pull/2
+```bash
+npm run update:model-catalog-pin
+```
 
-### 3. A Telegram Client(ish)
+## Packages
 
-It has all commands that Pi has, even your extensions. You can start a new session directly from the bot, instead of starting it from the terminal and continuing in telegram. See PR https://github.com/atharva-again/pi/pull/3 to see how it was implemented.
+This monorepo contains the Pi CLI and its supporting libraries.
 
-<img width="330" height="806" alt="Screenshot_20260706-013340" src="https://github.com/user-attachments/assets/e31770b9-a9cb-4b37-84ab-2a7f7d844d4a" />
+| Package | Description |
+|---------|-------------|
+| **[@earendil-works/chord](packages/chord)** | Typed host runtime for hot-reloadable plugins, contracts, replicated state, and RPC over JSON links |
+| **[@earendil-works/pi-telemetry](packages/telemetry)** | Vendor-neutral telemetry contracts, reference adapter, conformance tests, and typed schemas |
+| **[@earendil-works/pi-ai](packages/ai)** | Unified multi-provider LLM API (OpenAI, Anthropic, Google, etc.) |
+| **[@earendil-works/pi-durable](packages/durable)** | Durable conversation, task, and document runtime |
+| **[@earendil-works/pi-agent-core](packages/agent)** | Agent runtime with tool calling and state management |
+| **[@earendil-works/pi-coding-agent](packages/coding-agent)** | Interactive coding agent CLI |
+| **[@earendil-works/pi-tui](packages/tui)** | Terminal UI library with differential rendering |
 
-<img width="330" height="806" alt="Screenshot_20260706-013255" src="https://github.com/user-attachments/assets/35096503-3f4e-4720-a543-d09c02840f72" />
+For Slack/chat automation and workflows see [earendil-works/pi-chat](https://github.com/earendil-works/pi-chat).
 
-<img width="330" height="806" alt="Screenshot_20260706-013330" src="https://github.com/user-attachments/assets/988f7433-1d22-46fb-a732-77ca38bf0a9b" />
+## Permissions & Containerization
 
-### 4. Pinning Sessions in /resume
+Pi does not include a built-in permission system for restricting filesystem, process, network, or credential access. By default, it runs with the permissions of the user and process that launched it.
 
-Some sessions are more important than others and you go back and forth between them. It's nice to be able to pin them. See PR https://github.com/atharva-again/pi/pull/8 for how it was implemented.
+If you need stronger boundaries, containerize or sandbox Pi. See [packages/coding-agent/docs/containerization.md](packages/coding-agent/docs/containerization.md) for three patterns:
 
-<img width="724" height="186" alt="Screenshot_20260716_114538" src="https://github.com/user-attachments/assets/4cab7a94-cc9f-4e21-9538-962ea333905d" />
-<img width="724" height="356" alt="Screenshot_20260716_114605" src="https://github.com/user-attachments/assets/1d8c7b59-6558-41a8-ad89-f39150c5aeef" />
+- **Gondolin extension**: keep `pi` and provider auth on the host while routing built-in tools and `!` commands into a local Linux micro-VM.
+- **Plain Docker**: run the whole `pi` process in a local container for simple isolation.
+- **OpenShell**: run the whole `pi` process in a policy-controlled sandbox.
 
-### 5. Resume OpenCode Sessions In Pi
+## Contributing
 
-Just wanted to be import opencode sessions directly in pi so I can continue there. Implemented via https://github.com/atharva-again/pi/pull/9 and https://github.com/atharva-again/pi/pull/10. Checkout the extension's [README](https://github.com/atharva-again/pi/blob/main/packages/coding-agent/examples/extensions/resume-opencode/README.md). Watch the demo below.
+See [AGENTS.md](AGENTS.md) for project-specific development rules. Longer term plans for Pi can also be found in [RFCs](https://rfc.earendil.com/keyword/pi/).
 
-<img width="726" height="404" alt="pi-resume-opencode" src="https://github.com/user-attachments/assets/1a400e1f-4317-4987-902b-c0a131b8efe6" />
+## Development
 
-### 6. Resume Codex Sessions in Pi
+```bash
+npm install --ignore-scripts  # Install all dependencies without running lifecycle scripts
+npm run build         # Refresh model data, then build all packages
+npm run build:offline # Rebuild using existing model data without network access
+npm run check         # Lint, format, and type check
+./test.sh            # Run tests (skips LLM-dependent tests without API keys)
+./pi-test.sh         # Run pi from sources (can be run from any directory)
+```
 
-As you can see, the first two features are implemented were inspired by Codex CLI, so it only makes sense to add support for it here. This was implemented via PR https://github.com/atharva-again/pi/pull/12. You can watch the demo below. Detailed README for the extension can be found [here](https://github.com/atharva-again/pi/blob/main/packages/coding-agent/examples/extensions/resume-codex/README.md).
+### Using local packages outside the monorepo
 
-<img width="723" height="455" alt="pi-codex-resume" src="https://github.com/user-attachments/assets/4b4778bc-871c-4a54-b52f-7f5a21ab5d86" />
+Build every public package into one coherent local artifact set:
 
-### 7. Codex Usage Status
+```bash
+npm run pack:packages -- --out .artifacts/pi-packages
+```
 
-Added a `/status` extension for checking live ChatGPT Codex usage. It displays 5-hour and 7-day limits, credits, reset information, and blocked states, with RPC notifications for Telegram clients. See PR https://github.com/atharva-again/pi/pull/22 and the [extension source](https://github.com/atharva-again/pi/blob/main/packages/coding-agent/examples/extensions/codex-status.ts).
+This refreshes model data before building `pi-ai`. To avoid network access when
+model data is already hydrated, pass `--offline-model-data`.
 
-### 8. /refresh Command
+Then configure an external project to consume one package and resolve all of
+its Pi dependencies from the same artifact set. npm is the default:
 
-Since now I am working across two surfaces (Telegram and Pi on my machine), I needed a simple way to refresh the session without having to quit and reopen or resume.
+```bash
+node scripts/use-local-packages.mjs \
+  --manifest .artifacts/pi-packages/manifest.json \
+  --consumer ../my-project \
+  --package @earendil-works/pi-durable \
+  --package @earendil-works/pi-agent-core
+cd ../my-project
+npm install --ignore-scripts
+```
+
+For a pnpm project, point `--consumer` at the workspace root:
+
+```bash
+node scripts/use-local-packages.mjs \
+  --manifest .artifacts/pi-packages/manifest.json \
+  --consumer ../my-project \
+  --package @earendil-works/pi-agent-core \
+  --package-manager pnpm
+cd ../my-project
+pnpm install --ignore-scripts
+```
+
+Repeat `--package` for each direct dependency. The command updates the
+consumer's `package.json` with content-addressed local `file:` references. It
+writes transitive overrides to `package.json` for npm or `pnpm-workspace.yaml`
+for pnpm. Keep the artifact directory available while installing or updating
+the consumer. Re-run both commands after changing Pi source.
+
+## Build standalone binaries locally
+
+Build from the checkout without publishing binaries:
+
+```bash
+./scripts/build-binaries.sh --offline-model-data --platform linux-x64 --out "$PWD/out"
+```
+
+`--offline-model-data` uses existing model data without refreshing provider catalogs. The script installs dependencies and builds the executable with its runtime assets; pass `--skip-install` if dependencies are already provided.
+
+## Supply-chain hardening
+
+We treat npm dependency changes as reviewed code changes.
+
+- Direct external dependencies are pinned to exact versions. Internal workspace packages remain version-ranged.
+- `.npmrc` sets `save-exact=true` and `min-release-age=2` to avoid same-day dependency releases during npm resolution.
+- `package-lock.json` is the dependency ground truth. Pre-commit blocks accidental lockfile commits unless `PI_ALLOW_LOCKFILE_CHANGE=1` is set.
+- `npm run check` verifies pinned direct deps, native TypeScript import compatibility, and the generated coding-agent install lock.
+- The coding-agent install lock under `packages/coding-agent/install-lock/` is generated from the root lockfile and checked by `npm run check`.
+- Local distribution checks validate packed artifacts and installs without publishing them.
+- CI installs with `npm ci --ignore-scripts`.
+- Install lock generation has an explicit allowlist for dependency lifecycle scripts; new lifecycle-script deps fail checks until reviewed.
+
+## License
+
+MIT
+
+<p align="center">
+  <a href="https://pi.dev">pi.dev</a> domain graciously donated by
+  <br /><br />
+  <a href="https://exe.dev"><img src="packages/coding-agent/docs/images/exy.png" alt="Exy mascot" width="48" /><br />exe.dev</a>
+</p>

@@ -2,9 +2,7 @@
  * TUI session selector for --resume flag
  */
 
-import { join } from "node:path";
 import { setKeybindings } from "@earendil-works/pi-tui";
-import { getAgentDir } from "../config.ts";
 import { KeybindingsManager } from "../core/keybindings.ts";
 import type { SessionInfo, SessionListProgress } from "../core/session-manager.ts";
 import type { SettingsManager } from "../core/settings-manager.ts";
@@ -47,7 +45,7 @@ export async function selectSession(
 				process.exit(0);
 			},
 			() => ui.requestRender(),
-			{ showRenameHint: false, keybindings, pinStorePath: join(getAgentDir(), "session-pins.json") },
+			{ showRenameHint: false, keybindings },
 		);
 
 		ui.addChild(selector);

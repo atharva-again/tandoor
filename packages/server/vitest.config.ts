@@ -14,15 +14,8 @@ export default defineConfig({
 		reporters: process.env.GITHUB_ACTIONS ? ["dot", "github-actions"] : ["dot"],
 	},
 	resolve: {
-		conditions: ["source"],
 		alias: [
-			{ find: /^@earendil-works\/pi-agent-core$/, replacement: src("../agent/src/index.ts") },
-			{ find: /^@earendil-works\/pi-agent-core\/(.+)$/, replacement: `${src("../agent/src/")}$1.ts` },
-			{ find: /^@earendil-works\/pi-ai$/, replacement: src("../ai/src/index.ts") },
-			{ find: /^@earendil-works\/pi-ai\/(.+)$/, replacement: `${src("../ai/src/")}$1.ts` },
-			{ find: /^@earendil-works\/pi-telemetry$/, replacement: src("../telemetry/src/index.ts") },
 			{ find: /^@earendil-works\/pi-protocol$/, replacement: src("../protocol/src/index.ts") },
 		],
 	},
-	ssr: { resolve: { conditions: ["source"] } },
 });

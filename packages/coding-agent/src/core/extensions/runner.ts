@@ -2,7 +2,7 @@
  * Extension runner - executes extensions and manages their lifecycle.
  */
 
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import {
 	getCurrentSystemMessage,
 	type ImageContent,
@@ -27,8 +27,10 @@ import {
 import type { VirtualModelDefinition } from "../virtual-models.ts";
 import type {
 	AgentBeforeSettleEvent,
+	BeforeAgentStartCustomEvent,
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
+	BeforeAgentStartUserEvent,
 	BeforeProviderHeadersEvent,
 	BeforeProviderRequestEvent,
 	BoundaryContextPreview,
@@ -41,6 +43,7 @@ import type {
 	ContextUsage,
 	ContextWithSystemEvent,
 	EntryRenderer,
+	ExecuteToolOptions,
 	Extension,
 	ExtensionActions,
 	ExtensionCommandContext,
@@ -53,6 +56,7 @@ import type {
 	ExtensionMode,
 	ExtensionRuntime,
 	ExtensionShortcut,
+	ExtensionToolContext,
 	ExtensionUIContext,
 	InputEvent,
 	InputEventResult,
@@ -80,6 +84,7 @@ import type {
 	SessionShutdownEvent,
 	ToolCallEvent,
 	ToolCallEventResult,
+	ToolRenderers,
 	ToolResultEvent,
 	ToolResultEventResult,
 	TurnEndEvent,
@@ -95,8 +100,7 @@ const RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS = [
 	"app.clear",
 	"app.exit",
 	"app.suspend",
-	"app.thinking.cycleForward",
-	"app.thinking.cycleBackward",
+	"app.thinking.cycle",
 	"app.model.cycleForward",
 	"app.model.cycleBackward",
 	"app.model.select",
@@ -160,6 +164,11 @@ function isUserBashEventResult(value: unknown): value is UserBashEventResult {
 		(resultRecord.fullOutputPath === undefined || typeof resultRecord.fullOutputPath === "string")
 	);
 }
+
+/** The message that starts a run: the before_agent_start event without its prompt fields. */
+export type BeforeAgentStartTrigger =
+	| Pick<BeforeAgentStartUserEvent, "messageType" | "prompt" | "images">
+	| Pick<BeforeAgentStartCustomEvent, "messageType" | "message">;
 
 /** Combined result from all before_agent_start handlers. */
 interface BeforeAgentStartCombinedResult {
@@ -374,6 +383,8 @@ export class ExtensionRunner {
 	private getSystemPromptFn: () => string = () => "";
 	private getSystemPromptOptionsFn: () => BuildSystemPromptOptions = () =>
 		normalizeBuildSystemPromptOptions({ cwd: this.cwd });
+	private executeToolFn: ExtensionContextActions["executeTool"];
+	private getCallableToolsFn: () => readonly AgentTool[] = () => [];
 	private newSessionHandler: NewSessionHandler = async () => ({ cancelled: false });
 	private forkHandler: ForkHandler = async () => ({ cancelled: false });
 	private navigateTreeHandler: NavigateTreeHandler = async () => ({ cancelled: false });
@@ -421,6 +432,7 @@ export class ExtensionRunner {
 		this.runtime.setLabel = actions.setLabel;
 		this.runtime.getActiveTools = actions.getActiveTools;
 		this.runtime.getAllTools = actions.getAllTools;
+		this.runtime.getSettings = actions.getSettings;
 		this.runtime.setActiveTools = actions.setActiveTools;
 		this.runtime.refreshTools = actions.refreshTools;
 		this.runtime.getCommands = actions.getCommands;
@@ -443,6 +455,8 @@ export class ExtensionRunner {
 		this.getSystemPromptFn = contextActions.getSystemPrompt;
 		this.getSystemPromptOptionsFn =
 			contextActions.getSystemPromptOptions ?? (() => normalizeBuildSystemPromptOptions({ cwd: this.cwd }));
+		this.executeToolFn = contextActions.executeTool;
+		this.getCallableToolsFn = contextActions.getCallableTools ?? (() => []);
 
 		// Flush provider registrations queued during extension loading
 		for (const { name, config, extensionPath } of this.runtime.pendingProviderRegistrations) {
@@ -753,6 +767,14 @@ export class ExtensionRunner {
 		return this.extensions.flatMap((ext) => (ext.markdownTransformer ? [ext.markdownTransformer] : []));
 	}
 
+	/** Renderers of calls to `toolName`: extension resolvers in load order, then `base`. */
+	resolveToolRenderers(toolName: string, base: () => ToolRenderers | undefined): ToolRenderers | undefined {
+		const resolvers = this.extensions.flatMap((ext) => ext.toolRenderers ?? []);
+		const resolve = (index: number): ToolRenderers | undefined =>
+			index < resolvers.length ? resolvers[index](toolName, () => resolve(index + 1)) : base();
+		return resolve(0);
+	}
+
 	getEntryRenderer(customType: string): EntryRenderer | undefined {
 		for (const ext of this.extensions) {
 			const renderer = ext.entryRenderers?.get(customType);
@@ -911,6 +933,39 @@ export class ExtensionRunner {
 				return runner.getSystemPromptFn();
 			},
 		};
+	}
+
+	/**
+	 * Create the context for executing the tool call `toolCallId`: the extension context plus
+	 * `tools` and `executeTool()`. `signal` is the default signal of nested calls.
+	 */
+	createToolContext(toolCallId: string, signal: AbortSignal | undefined): ExtensionToolContext {
+		const runner = this;
+		// createContext() returns a fresh object, so adding properties does not affect other contexts.
+		return Object.defineProperties(this.createContext() as ExtensionToolContext, {
+			tools: {
+				get() {
+					runner.assertActive();
+					return runner.getCallableToolsFn();
+				},
+			},
+			executeTool: {
+				value: async (name: string, args: unknown, options: ExecuteToolOptions = {}) => {
+					runner.assertActive();
+					if (!runner.executeToolFn) {
+						return {
+							toolCall: { type: "toolCall", id: `${toolCallId}/0`, name, arguments: {} },
+							result: {
+								content: [{ type: "text", text: "Nested tool calls are not available in this context" }],
+								details: {},
+							},
+							isError: true,
+						};
+					}
+					return runner.executeToolFn(toolCallId, name, args, { ...options, signal: options.signal ?? signal });
+				},
+			},
+		});
 	}
 
 	createCommandContext(): ExtensionCommandContext {
@@ -1119,10 +1174,16 @@ export class ExtensionRunner {
 
 					if (handlerResult.content !== undefined) {
 						currentEvent.content = handlerResult.content;
+						// Structured content that is not replaced along with the content may no longer match it.
+						if (handlerResult.structuredContent === undefined) delete currentEvent.structuredContent;
 						modified = true;
 					}
 					if (handlerResult.details !== undefined) {
 						currentEvent.details = handlerResult.details;
+						modified = true;
+					}
+					if (handlerResult.structuredContent !== undefined) {
+						currentEvent.structuredContent = handlerResult.structuredContent;
 						modified = true;
 					}
 					if (handlerResult.isError !== undefined) {
@@ -1153,6 +1214,7 @@ export class ExtensionRunner {
 		return {
 			content: currentEvent.content,
 			details: currentEvent.details,
+			structuredContent: currentEvent.structuredContent,
 			isError: currentEvent.isError,
 			usage: currentEvent.usage,
 		};
@@ -1337,8 +1399,7 @@ export class ExtensionRunner {
 	}
 
 	async emitBeforeAgentStart(
-		prompt: string,
-		images: ImageContent[] | undefined,
+		trigger: BeforeAgentStartTrigger,
 		systemPromptOptions: BuildSystemPromptOptions,
 	): Promise<BeforeAgentStartCombinedResult> {
 		const currentOptions = normalizeBuildSystemPromptOptions(systemPromptOptions);
@@ -1357,9 +1418,8 @@ export class ExtensionRunner {
 			for (const handler of handlers) {
 				try {
 					const event: BeforeAgentStartEvent = {
+						...trigger,
 						type: "before_agent_start",
-						prompt,
-						images,
 						get systemPrompt() {
 							return renderCurrentSystemPrompt();
 						},

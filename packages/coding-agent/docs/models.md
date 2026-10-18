@@ -18,7 +18,7 @@ Browse the [model catalog](https://pi.dev/models) for current providers, model I
 
 Run `/login` and select a provider. Pi stores credentials in [`auth.json`](configuration.md#agent-directory). Run `/logout` to remove stored credentials for a provider.
 
-You can instead provide an API key through the provider's environment variable. This is useful in CI and other environments where Pi should not write credentials. [Provider Authentication](providers.md) lists the variables and cloud-provider setup.
+You can instead provide an API key through the provider's environment variable. This is useful in CI and other environments where Pi should not write credentials. [Providers](providers.md) lists the variables and provider-specific setup.
 
 When several credential sources are configured, Pi uses a runtime `--api-key` first, then a stored `auth.json` credential, an `apiKey` from `models.json`, and finally the provider's environment variables or ambient cloud credentials. Provider extensions can define their own authentication behavior.
 
@@ -48,6 +48,7 @@ Use [`models.json`](configuration.md#agent-directory) when an endpoint speaks an
 
 ```json
 {
+  "$schema": "https://pi.dev/schemas/models.schema.json",
   "providers": {
     "ollama": {
       "baseUrl": "http://localhost:11434/v1",
@@ -98,7 +99,58 @@ Use `promptCache` to declare the provider's best-effort cache lifetime in second
 
 Choose the conservative end of any published range. A model without a lifetime for the active tier is not eligible for cache warming. A `modelOverrides` entry can set `inputLimits` or `promptCache` for a built-in or extension model, including a model accessed through a validated proxy. See [`cacheWarming`](settings.md#model-and-thinking).
 
+### Configure sampling by thinking level
+
+OpenAI-compatible APIs support free-form `samplingParams` model defaults and `samplingParamsByThinkingLevel` overrides. The latter uses Pi thinking-level keys (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`), not provider values from `thinkingLevelMap`:
+
+```json
+{
+  "id": "qwen-thinking-model",
+  "reasoning": true,
+  "samplingParams": {
+    "temperature": 1.0,
+    "top_p": 0.95
+  },
+  "samplingParamsByThinkingLevel": {
+    "off": {
+      "temperature": 0.7,
+      "top_p": 0.8
+    },
+    "high": {
+      "top_k": 20
+    }
+  }
+}
+```
+
+Pi first clamps unsupported thinking levels, then merges model `samplingParams`, the effective level's override, and request-level `samplingParams` in that order. Later values win per key. Missing levels inherit the model defaults. `modelOverrides` merges per-level entries per key with the base model. These fields apply only to `openai-completions`, `openai-responses`, and `azure-openai-responses`; other APIs ignore them.
+
 Compatibility settings should describe verified differences in the endpoint's request or response behavior. Do not enable them based only on an endpoint advertising OpenAI or Anthropic compatibility.
+
+## Use classifier models
+
+Classifier models do not chat. They answer typed questions about JSON state: pick one of several choices, answer yes or no, or give a score, each with probabilities. Pi includes TypeSafe's Jev model from these providers, Cloudflare's Clef and Clef Flash models from Workers AI, and OpenAI's GPT-6 Luna through the [Decisions API](https://developers.openai.com/api/docs/guides/decisions):
+
+| Provider | Model IDs | Authentication |
+|---|---|---|
+| `typesafe` | `jev-latest` | `TYPESAFE_API_KEY` |
+| `openrouter` | `typesafe/jev-1.13`, `~typesafe/jev-latest` | `OPENROUTER_API_KEY` or `/login` |
+| `cloudflare-workers-ai` | `typesafe/jev`, `@cf/cloudflare/clef`, `@cf/cloudflare/clef-flash` | `CLOUDFLARE_API_KEY` and `CLOUDFLARE_ACCOUNT_ID` |
+| `vercel-ai-gateway` | `typesafe-ai/jev` | `AI_GATEWAY_API_KEY` |
+| `opencode` | `jev-1.13`, `jev-1.13-free` | `OPENCODE_API_KEY` |
+| `openai` | `gpt-6-luna` | `OPENAI_API_KEY` |
+
+Chat models on a [llama.cpp router](llama-cpp.md#classification) are also listed as classifier models.
+
+OpenAI's Decisions API needs an API key. Sign in with ChatGPT credentials do not work with it, so `gpt-6-luna` is not listed as available while `openai` is logged in through `/login`, even when `OPENAI_API_KEY` is set; log out of `openai` to use the key. GPT-6 Luna also judges images passed in `images`; other classifier models return an error for them. The API rejects inputs above 922K tokens, but requests that run longer than about five seconds, currently above roughly 600K input tokens, fail with a gateway timeout.
+
+Classifier models do not appear in `/model`. Extensions can find them with `ctx.modelRegistry.findOfType()` and call them through `ctx.modelRegistry.classify()`. [Virtual models](virtual-models.md#route-requests) can use classifiers to route requests; see the `jev-router.ts` example. When the service reports token counts, `result.usage` carries them and their cost. Models without catalog pricing, such as TypeSafe's direct `jev-latest`, report tokens at no cost.
+
+## Use image models
+
+Image models generate images from a prompt and optional input images. Pi lists OpenRouter's image models, such as `google/gemini-2.5-flash-image` and `black-forest-labs/flux.2-pro`, under the `openrouter` provider; they use the same `OPENROUTER_API_KEY` or `/login` credential as its chat models.
+
+Like classifier models, image models do not appear in `/model`. Extensions can discover them with `ctx.modelRegistry.findOfType()` and call `ctx.modelRegistry.generateImages()`. The input can include text and `{ type: "image", data, mimeType }` blocks for editing or image references. Generated image blocks are returned to the extension; Pi does not save them automatically.
 
 ## Add a custom provider
 

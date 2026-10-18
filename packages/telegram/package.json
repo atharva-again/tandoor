@@ -1,6 +1,7 @@
 {
 	"name": "@atharva-again/pi-tg",
 	"version": "0.1.5",
+	"private": true,
 	"description": "Telegram client for pi",
 	"homepage": "https://github.com/atharva-again/pi#readme",
 	"repository": {

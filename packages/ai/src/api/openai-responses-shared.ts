@@ -1,6 +1,7 @@
 import type OpenAI from "openai";
 import type {
 	Tool as OpenAITool,
+	ResponseConfigurationUpdateItemParam,
 	ResponseCreateParamsStreaming,
 	ResponseInput,
 	ResponseInputContent,
@@ -32,7 +33,7 @@ import type {
 } from "../types.ts";
 import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
-import { parseStreamingJson } from "../utils/json-parse.ts";
+import { parseStreamingJson, parseToolCallArguments } from "../utils/json-parse.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { getSystemMessageText, renderSystemMessageUpdate } from "../utils/text.ts";
 import { resolveTranscript, resolveTranscriptTools } from "../utils/transcript.ts";
@@ -129,6 +130,16 @@ export interface ConvertResponsesMessagesOptions {
 	supportsAdditionalTools?: boolean;
 	supportsToolSearch?: boolean;
 	toolOptions?: ConvertResponsesToolsOptions;
+	/**
+	 * Effort for the reply being generated. When set, the thinking level is sent as
+	 * configuration_update items instead of a changing reasoning.effort, which would invalidate the
+	 * prompt cache. Each item sets the effort from that point on: one goes before every earlier
+	 * reply with the level recorded on it (`providerThinkingLevel`), and one with this effort goes
+	 * at the end. Earlier input therefore never changes. OpenAI documents the item before user
+	 * messages only. After tool results it was verified on gpt-6-luna (October 2026) to be accepted
+	 * and to apply to the next reply.
+	 */
+	configurationUpdateEffort?: string;
 }
 
 export interface ConvertResponsesToolsOptions {
@@ -211,6 +222,12 @@ export function convertResponsesMessages<TApi extends Api>(
 		} satisfies ResponseToolSearchOutputItemParam);
 	};
 	const includeInitialSystemMessage = options?.includeSystemPrompt ?? true;
+	const pushConfigurationUpdate = (effort: string): void => {
+		messages.push({
+			type: "configuration_update",
+			reasoning: { effort: effort as NonNullable<ResponseConfigurationUpdateItemParam.Reasoning["effort"]> },
+		} satisfies ResponseConfigurationUpdateItemParam);
+	};
 	const compat = model.compat as { supportsDeveloperRole?: boolean } | undefined;
 	const instructionRole = model.reasoning && compat?.supportsDeveloperRole !== false ? "developer" : "system";
 
@@ -294,14 +311,13 @@ export function convertResponsesMessages<TApi extends Api>(
 					let itemId: string | undefined = itemIdRaw;
 
 					// For different-model messages, set id to undefined to avoid pairing validation.
-					// OpenAI tracks which fc_xxx IDs were paired with rs_xxx reasoning items.
+					// OpenAI tracks which item IDs were paired with rs_xxx reasoning items.
 					// By omitting the id, we avoid triggering that validation (like cross-provider does).
-					// When replaying custom-tool calls as a function_call, also drop non-fc_* ids such as
-					// ctc_* custom-tool ids because function_call item ids must be fc_*.
-					if (
-						(isDifferentModel && itemId?.startsWith("fc_")) ||
-						(customInputProperty === undefined && !itemId?.startsWith("fc_"))
-					) {
+					// Also drop ids that do not match the replayed item type: function_call ids must be fc_*
+					// and custom_tool_call ids must be ctc_*. Foreign tool call ids are normalized to fc_*, and
+					// a call can switch between the two types when grammar tool support differs.
+					const itemIdPrefix = customInputProperty === undefined ? "fc_" : "ctc_";
+					if (isDifferentModel || !itemId?.startsWith(itemIdPrefix)) {
 						itemId = undefined;
 					}
 
@@ -329,6 +345,13 @@ export function convertResponsesMessages<TApi extends Api>(
 				}
 			}
 			if (output.length === 0) continue;
+			if (
+				options?.configurationUpdateEffort !== undefined &&
+				isSameModel &&
+				msg.providerThinkingLevel !== undefined
+			) {
+				pushConfigurationUpdate(msg.providerThinkingLevel);
+			}
 			messages.push(...output);
 		} else if (msg.role === "toolResult") {
 			const [callId] = msg.toolCallId.split("|");
@@ -350,6 +373,7 @@ export function convertResponsesMessages<TApi extends Api>(
 		}
 		if (!isLeadingSystemMessage) msgIndex++;
 	}
+	if (options?.configurationUpdateEffort !== undefined) pushConfigurationUpdate(options.configurationUpdateEffort);
 
 	return messages;
 }
@@ -714,7 +738,7 @@ export async function processResponsesStream<TApi extends Api>(
 				slot?.type === "toolCall" &&
 				slot.block.partialJson !== undefined
 			) {
-				slot.block.arguments = parseStreamingJson(item.arguments || slot.block.partialJson || "{}");
+				Object.assign(slot.block, parseToolCallArguments(item.arguments || slot.block.partialJson));
 				if (item.namespace !== undefined) slot.block.namespace = item.namespace;
 				// Finalize in-place and strip the scratch buffer so replay only
 				// carries parsed arguments.

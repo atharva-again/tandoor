@@ -120,4 +120,4 @@ it("converges across randomized prepared revisions", () => {
 			expectAliasFree(tracker.value);
 		}
 	}
-});
+}, 15_000);

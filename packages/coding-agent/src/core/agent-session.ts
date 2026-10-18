@@ -15,15 +15,21 @@
 
 import { readFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
-import type {
-	Agent,
-	AgentContext,
-	AgentEvent,
-	AgentMessage,
-	AgentState,
-	AgentTool,
-	PrepareNextTurnContext,
-	ThinkingLevel,
+import {
+	type AfterToolCallContext,
+	type AfterToolCallResult,
+	type Agent,
+	type AgentContext,
+	type AgentEvent,
+	type AgentMessage,
+	type AgentState,
+	type AgentTool,
+	type AgentToolCallOutcome,
+	type BeforeToolCallContext,
+	type BeforeToolCallResult,
+	type PrepareNextTurnContext,
+	runToolCall,
+	type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
 import { contentText, getCurrentSystemMessage, retryDelayMs } from "@earendil-works/pi-ai";
 import type {
@@ -77,6 +83,7 @@ import {
 	type AgentActivityOutcome,
 	type BoundaryContextPreview,
 	type ContextUsage,
+	type ExecuteToolOptions,
 	type ExtensionCommandContextActions,
 	type ExtensionErrorListener,
 	type ExtensionMode,
@@ -97,15 +104,18 @@ import {
 	type ToolExecutionEndEvent,
 	type ToolExecutionStartEvent,
 	type ToolExecutionUpdateEvent,
+	type ToolExposure,
 	type ToolInfo,
+	type ToolLoadout,
 	type TreePreparation,
 	type TurnStartEvent,
 	wrapRegisteredTools,
 } from "./extensions/index.ts";
-import { emitSessionShutdownEvent } from "./extensions/runner.ts";
+import { type BeforeAgentStartTrigger, emitSessionShutdownEvent } from "./extensions/runner.ts";
 import { type BashExecutionMessage, type CustomMessage, convertToLlm } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
+import { NestedToolCallRunner } from "./nested-tool-calls.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import { exportSessionToJsonl } from "./session-export.ts";
@@ -118,9 +128,14 @@ import {
 	SessionManager,
 	type SessionProjection,
 } from "./session-manager.ts";
-import type { CacheWarmingMode, SettingsManager } from "./settings-manager.ts";
+import {
+	applyToolModifiers,
+	type CacheWarmingMode,
+	DEFAULT_TOOL_NAMES,
+	type SettingsManager,
+} from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
-import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
+import { BUILTIN_PATH_PREFIX, createSyntheticSourceInfo, isSyntheticPath, type SourceInfo } from "./source-info.ts";
 import {
 	buildSystemPrompt,
 	buildSystemPromptSections,
@@ -128,10 +143,11 @@ import {
 	type NormalizedBuildSystemPromptOptions,
 	normalizeBuildSystemPromptOptions,
 } from "./system-prompt.ts";
+import { createToolNameMatcher } from "./tool-name-matcher.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
-import { addUsageToTotals, createUsageTotals } from "./usage-totals.ts";
+import { addUsageToTotals, combineUsage, createUsageTotals } from "./usage-totals.ts";
 import {
 	findLatestResponse,
 	getBranchSelection,
@@ -168,15 +184,22 @@ export function parseSkillBlock(text: string): ParsedSkillBlock | null {
 	};
 }
 
+/** Tool execution events of calls a tool made through `ctx.executeTool()` carry `parentToolCallId`. */
+type WithParentToolCallId<E> = E extends {
+	type: "tool_execution_start" | "tool_execution_update" | "tool_execution_end";
+}
+	? E & { parentToolCallId?: string }
+	: E;
+
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
-	| Exclude<AgentEvent, { type: "agent_end" }>
+	| WithParentToolCallId<Exclude<AgentEvent, { type: "agent_end" }>>
 	| {
 			type: "agent_end";
 			messages: AgentMessage[];
 			willRetry: boolean;
 	  }
-	| { type: "agent_settled" }
+	| { type: "agent_settled"; aborted: boolean }
 	| {
 			type: "queue_update";
 			steering: readonly string[];
@@ -242,9 +265,23 @@ export interface AgentSessionConfig {
 	cacheWarmer?: Pick<CacheWarmer, "cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed">;
 	/** Initial active built-in tool names. Default: [read, bash, edit, write] */
 	initialActiveToolNames?: string[];
-	/** Optional allowlist of tool names. When provided, only these tool names are exposed. */
+	/**
+	 * Whether the initial tools come from the `defaultTools` setting. When true, a resumed session
+	 * replaces them with the loadout its transcript records, with `defaultToolModifiers` applied, and
+	 * reload activates tools newly added to the setting. Tools removed from it stay active.
+	 */
+	usesDefaultTools?: boolean;
+	/**
+	 * `+name`/`-name` entries applied on top of the `defaultTools` setting, from `--tools`. Reload
+	 * applies them to the reloaded setting too, so a removed tool stays removed.
+	 */
+	defaultToolModifiers?: string[];
+	/**
+	 * Optional allowlist of tool names or patterns (`*` matches any characters). When provided, only
+	 * matching tools are exposed. An empty list exposes no tools.
+	 */
 	allowedToolNames?: string[];
-	/** Optional denylist of tool names. When provided, these tool names are not exposed. */
+	/** Optional denylist of tool names or patterns. When provided, matching tools are not exposed. */
 	excludedToolNames?: string[];
 	/**
 	 * Override base tools (useful for custom runtimes).
@@ -406,8 +443,17 @@ export class AgentSession {
 	private _cwd: string;
 	private _extensionRunnerRef?: { current?: ExtensionRunner };
 	private _initialActiveToolNames?: string[];
-	private _allowedToolNames?: Set<string>;
-	private _excludedToolNames?: Set<string>;
+	/**
+	 * Tools of the restored or reloaded loadout that are not registered yet. They are activated when
+	 * they are registered, and dropped when
+	 * `setActiveToolsByName()` deactivates a tool or the next agent run starts.
+	 */
+	private _pendingToolNames = new Set<string>();
+	private _usesDefaultTools: boolean;
+	private _defaultToolModifiers: string[];
+	/** Matches the `--tools` entries: tool names or patterns. */
+	private _allowedTools?: (name: string) => boolean;
+	private _excludedTools?: (name: string) => boolean;
 	private _baseToolsOverride?: Record<string, AgentTool>;
 	private _sessionStartEvent: SessionStartEvent;
 	private _extensionUIContext?: ExtensionUIContext;
@@ -423,6 +469,10 @@ export class AgentSession {
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
+	/** Created on the first `ctx.executeTool()` call. */
+	private _nestedToolCalls: NestedToolCallRunner | undefined;
+	/** Declared tools whose declarations requests leave out, from `prepareLoadout` hooks. */
+	private _hiddenDeclarations: ReadonlySet<string> = new Set();
 	private _toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
 	private _toolPromptSnippets: Map<string, string> = new Map();
 	private _toolPromptGuidelines: Map<string, string[]> = new Map();
@@ -446,8 +496,12 @@ export class AgentSession {
 		}
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
-		this._allowedToolNames = config.allowedToolNames ? new Set(config.allowedToolNames) : undefined;
-		this._excludedToolNames = config.excludedToolNames ? new Set(config.excludedToolNames) : undefined;
+		this._usesDefaultTools = config.usesDefaultTools ?? false;
+		this._defaultToolModifiers = config.defaultToolModifiers ?? [];
+		if (config.allowedToolNames) {
+			this._allowedTools = createToolNameMatcher(config.allowedToolNames);
+		}
+		this._excludedTools = config.excludedToolNames ? createToolNameMatcher(config.excludedToolNames) : undefined;
 		this._baseToolsOverride = config.baseToolsOverride;
 		this._sessionStartEvent = config.sessionStartEvent ?? { type: "session_start", reason: "startup" };
 
@@ -458,13 +512,14 @@ export class AgentSession {
 		this._installAgentNextTurnRefresh();
 		this._installAgentRequestProjection();
 		this._installAgentBoundaryHooks();
+		this._installHiddenDeclarationsProjection();
 		this._installAgentForcedPromptProjection();
 
 		this._buildRuntime({
 			activeToolNames: this._initialActiveToolNames,
 			includeAllExtensionTools: true,
 		});
-		if (this._initialActiveToolNames === undefined) this._restoreToolsFromTranscript();
+		if (this._usesDefaultTools) this._restoreToolsFromTranscript(this._defaultToolModifiers);
 	}
 
 	get modelRuntime(): ModelRuntime {
@@ -592,61 +647,117 @@ export class AgentSession {
 	 * happens here instead of in wrappers.
 	 */
 	private _installAgentToolHooks(): void {
-		this.agent.beforeToolCall = async ({ toolCall, args }) => {
-			const runner = this._extensionRunner;
-			if (!runner.hasHandlers("tool_call")) {
-				return undefined;
-			}
+		this.agent.beforeToolCall = (context) => this._beforeToolCall(context);
+		this.agent.afterToolCall = (context) => this._afterToolCall(context);
+	}
 
-			try {
-				return await runner.emitToolCall({
-					type: "tool_call",
+	/** `tool_call` handlers. `parentToolCallId` is set for calls another tool made. */
+	private async _beforeToolCall(
+		{ toolCall, args }: BeforeToolCallContext,
+		parentToolCallId?: string,
+	): Promise<BeforeToolCallResult | undefined> {
+		const runner = this._extensionRunner;
+		if (!runner.hasHandlers("tool_call")) {
+			return undefined;
+		}
+
+		try {
+			return await runner.emitToolCall({
+				type: "tool_call",
+				toolName: toolCall.name,
+				toolCallId: toolCall.id,
+				...(parentToolCallId ? { parentToolCallId } : {}),
+				input: args as Record<string, unknown>,
+			});
+		} catch (err) {
+			if (err instanceof Error) {
+				throw err;
+			}
+			throw new Error(`Extension failed, blocking execution: ${String(err)}`);
+		}
+	}
+
+	/** `tool_result` handlers and image normalization. `parentToolCallId` is set for calls another tool made. */
+	private async _afterToolCall(
+		{ toolCall, args, result, isError }: AfterToolCallContext,
+		parentToolCallId?: string,
+	): Promise<AfterToolCallResult | undefined> {
+		const runner = this._extensionRunner;
+		const hookResult = runner.hasHandlers("tool_result")
+			? await runner.emitToolResult({
+					type: "tool_result",
 					toolName: toolCall.name,
 					toolCallId: toolCall.id,
+					...(parentToolCallId ? { parentToolCallId } : {}),
 					input: args as Record<string, unknown>,
-				});
-			} catch (err) {
-				if (err instanceof Error) {
-					throw err;
+					content: result.content,
+					details: result.details,
+					...(result.structuredContent === undefined ? {} : { structuredContent: result.structuredContent }),
+					isError,
+					usage: result.usage,
+				})
+			: undefined;
+
+		const content = hookResult?.content ?? result.content ?? [];
+		// Runs after the extension hook so images injected or replaced by extensions are normalized too.
+		const resizeOptions = this._limitsModel()?.inputLimits?.images?.resize;
+		const normalizedContent = await normalizeToolResultImages(content, {
+			autoResizeImages: this.settingsManager.getImageAutoResize(),
+			...(resizeOptions ? { resizeOptions } : {}),
+		});
+
+		if (!hookResult && normalizedContent === content) {
+			return undefined;
+		}
+
+		// The hook result already dropped structured content that replaced content no longer matches.
+		return {
+			content: normalizedContent,
+			details: hookResult?.details,
+			structuredContent: hookResult ? hookResult.structuredContent : result.structuredContent,
+			isError: hookResult?.isError ?? isError,
+			usage: hookResult?.usage,
+		};
+	}
+
+	/**
+	 * Run a call that the tool call `parentToolCallId` made through `ctx.executeTool()`. It goes
+	 * through the agent's tool pipeline with the session's hooks, against the callable tools.
+	 */
+	private async _executeNestedToolCall(
+		parentToolCallId: string,
+		name: string,
+		args: unknown,
+		options: ExecuteToolOptions,
+	): Promise<AgentToolCallOutcome> {
+		this._nestedToolCalls ??= new NestedToolCallRunner({
+			getTools: () => this._getCallableTools(),
+			isSequential: () => this.agent.toolExecution === "sequential",
+			runToolCall: (toolCall, parentId, signal, onUpdate) => {
+				const assistantMessage = this._findLastAssistantMessage();
+				if (!assistantMessage) {
+					return Promise.resolve({
+						toolCall,
+						result: { content: [{ type: "text", text: "No assistant message issued this call" }], details: {} },
+						isError: true,
+					});
 				}
-				throw new Error(`Extension failed, blocking execution: ${String(err)}`);
-			}
-		};
-
-		this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
-			const runner = this._extensionRunner;
-			const hookResult = runner.hasHandlers("tool_result")
-				? await runner.emitToolResult({
-						type: "tool_result",
-						toolName: toolCall.name,
-						toolCallId: toolCall.id,
-						input: args as Record<string, unknown>,
-						content: result.content,
-						details: result.details,
-						isError,
-						usage: result.usage,
-					})
-				: undefined;
-
-			const content = hookResult?.content ?? result.content ?? [];
-			// Runs after the extension hook so images injected or replaced by extensions are normalized too.
-			const resizeOptions = this._limitsModel()?.inputLimits?.images?.resize;
-			const normalizedContent = await normalizeToolResultImages(content, {
-				autoResizeImages: this.settingsManager.getImageAutoResize(),
-				...(resizeOptions ? { resizeOptions } : {}),
-			});
-
-			if (!hookResult && normalizedContent === content) {
-				return undefined;
-			}
-
-			return {
-				content: normalizedContent,
-				details: hookResult?.details,
-				isError: hookResult?.isError ?? isError,
-				usage: hookResult?.usage,
-			};
-		};
+				return runToolCall(toolCall, {
+					tools: this._getCallableTools(),
+					assistantMessage,
+					context: { messages: this.agent.state.messages, tools: this.agent.state.tools },
+					beforeToolCall: (context) => this._beforeToolCall(context, parentId),
+					afterToolCall: (context) => this._afterToolCall(context, parentId),
+					signal,
+					onUpdate,
+				});
+			},
+			emit: async (event) => {
+				await this._extensionRunner.emit(event);
+				this._emit(event);
+			},
+		});
+		return this._nestedToolCalls.execute(parentToolCallId, name, args, options);
 	}
 
 	/** Whether `projection`, the current session projection, exceeds the compaction threshold of `model`. */
@@ -966,8 +1077,9 @@ export class AgentSession {
 		this._isAgentRunActive = false;
 		this._isEmittingAgentSettled = true;
 		try {
-			await this._extensionRunner.emit({ type: "agent_settled" });
-			this._emit({ type: "agent_settled" });
+			const aborted = this._agentRunAbortRequested;
+			await this._extensionRunner.emit({ type: "agent_settled", aborted });
+			this._emit({ type: "agent_settled", aborted });
 		} finally {
 			this._isEmittingAgentSettled = false;
 		}
@@ -984,6 +1096,7 @@ export class AgentSession {
 		this._resolveIdleWaitIfIdle();
 	}
 
+	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _startWorkDuration(startMs: number, source: "agent" | "user"): void {
 		this._workDurationStartMs = startMs;
 		this._workDurationStartSource = source;
@@ -1030,7 +1143,22 @@ export class AgentSession {
 		if (event.type === "agent_start" && this._workDurationStartMs === undefined) {
 			this._startWorkDuration(Date.now(), "agent");
 		}
-
+		// An abort requested while the run was starting, e.g. during before_agent_start, stops it
+		// here. agent_start is awaited before the first request.
+		if (event.type === "agent_start" && this._agentRunAbortRequested) this.agent.abort();
+		// Record the calls a tool made through ctx.executeTool() and their usage on its result message.
+		if (this._nestedToolCalls) {
+			if (event.type === "message_start" && event.message.role === "toolResult") {
+				const message = event.message;
+				const summary = this._nestedToolCalls.takeRecord(message.toolCallId);
+				if (summary?.calls) message.nestedCalls = summary.calls;
+				if (summary?.usage) {
+					message.usage = message.usage ? combineUsage(message.usage, summary.usage) : summary.usage;
+				}
+			} else if (event.type === "agent_end") {
+				this._nestedToolCalls.clear();
+			}
+		}
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
@@ -1288,6 +1416,7 @@ export class AgentSession {
 				toolName: event.toolName,
 				result: event.result,
 				isError: event.isError,
+				...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
 			};
 			await this._extensionRunner.emit(extensionEvent);
 		}
@@ -1409,11 +1538,16 @@ export class AgentSession {
 	}
 
 	/**
-	 * Get the names of currently active tools.
-	 * Returns the names of tools currently set on the agent.
+	 * Get the names of currently active tools, which are the tools declared to the model.
+	 * Tools with `deferred` exposure are callable from other tools without being active.
 	 */
 	getActiveToolNames(): string[] {
 		return this.agent.state.tools.map((t) => t.name);
+	}
+
+	/** Get the names of the tools that tools can call through `ctx.executeTool()`. */
+	getCallableToolNames(): string[] {
+		return this._getCallableTools().map((t) => t.name);
 	}
 
 	/**
@@ -1425,6 +1559,9 @@ export class AgentSession {
 			description: definition.description,
 			parameters: definition.parameters,
 			promptGuidelines: definition.promptGuidelines,
+			exposure: this._getToolExposure(definition.name),
+			...(definition.namespace ? { namespace: definition.namespace } : {}),
+			...(definition.reachesTools ? { reachesTools: definition.reachesTools } : {}),
 			sourceInfo,
 		}));
 	}
@@ -1435,22 +1572,97 @@ export class AgentSession {
 
 	/**
 	 * Set active tools by name.
-	 * Only tools in the registry can be enabled. Unknown tool names are ignored.
+	 * Only tools in the registry can be enabled. Unknown and hidden tool names are ignored.
 	 * Also rebuilds the system prompt to reflect the new tool set.
 	 * Changes take effect on the next agent turn.
 	 */
 	setActiveToolsByName(toolNames: string[]): void {
-		const tools: AgentTool[] = [];
-		const validToolNames: string[] = [];
-		for (const name of toolNames) {
+		const previous = this.getActiveToolNames();
+		this._setActiveTools(toolNames);
+		// A loadout that deactivates a tool replaces the restored one, whose pending tools are dropped.
+		// One that only adds tools, like activating tool_search, keeps them.
+		const active = new Set(this.getActiveToolNames());
+		if (previous.some((name) => !active.has(name))) this._pendingToolNames.clear();
+	}
+
+	private _setActiveTools(toolNames: string[]): void {
+		const tools = this._applyToolLoadout(toolNames);
+		for (const tool of tools) this._pendingToolNames.delete(tool.name);
+		this._rebuildSystemPrompt(tools.map((tool) => tool.name));
+	}
+
+	/** Whether `--tools` and `--exclude-tools` keep the tool registered. */
+	private _isAllowedTool(name: string): boolean {
+		if (this._excludedTools?.(name)) return false;
+		return !this._allowedTools || this._allowedTools(name);
+	}
+
+	private _getToolExposure(name: string): ToolExposure {
+		return this._toolDefinitions.get(name)?.definition.exposure ?? "direct";
+	}
+
+	/**
+	 * Tools callable through `ctx.executeTool()`: the active `direct` tools and every registered
+	 * `deferred` tool.
+	 */
+	private _getCallableTools(active: ReadonlySet<string> = new Set(this.getActiveToolNames())): AgentTool[] {
+		return [...this._toolRegistry.values()].filter((tool) => {
+			const exposure = this._getToolExposure(tool.name);
+			return exposure === "deferred" || (exposure === "direct" && active.has(tool.name));
+		});
+	}
+
+	/**
+	 * Set the agent's tools for the given active tool names and return them. The active tools are
+	 * the registered, non-hidden ones; they are declared to the model. Active tools with a
+	 * `prepareLoadout` hook can change the declared descriptions and hide declarations from
+	 * requests (see {@link _installHiddenDeclarationsProjection}).
+	 */
+	private _applyToolLoadout(toolNames: string[]): AgentTool[] {
+		const tools = [...new Set(toolNames)].flatMap((name) => {
 			const tool = this._toolRegistry.get(name);
-			if (tool) {
-				tools.push(tool);
-				validToolNames.push(name);
+			return tool && this._getToolExposure(name) !== "hidden" ? [tool] : [];
+		});
+		const hooks = tools.flatMap((tool) => {
+			const entry = this._toolDefinitions.get(tool.name);
+			return entry?.definition.prepareLoadout ? [entry] : [];
+		});
+		const hidden = new Set<string>();
+		let declared = tools;
+		if (hooks.length > 0) {
+			const loadout: ToolLoadout = {
+				declared: tools,
+				callable: this._getCallableTools(new Set(tools.map((tool) => tool.name))),
+				registered: [...this._toolRegistry.values()],
+				getExposure: (name) => this._getToolExposure(name),
+				getNamespace: (name) => this._toolDefinitions.get(name)?.definition.namespace,
+				getPromptGuidelines: (name) => this._toolPromptGuidelines.get(name) ?? [],
+			};
+			const descriptions = new Map<string, string>();
+			for (const { definition, sourceInfo } of hooks) {
+				try {
+					const changes = definition.prepareLoadout?.(loadout);
+					for (const [name, description] of Object.entries(changes?.descriptions ?? {})) {
+						descriptions.set(name, description);
+					}
+					for (const name of changes?.hiddenDeclarations ?? []) hidden.add(name);
+				} catch (error) {
+					this._extensionRunner.emitError({
+						extensionPath: sourceInfo.path,
+						event: "prepare_loadout",
+						error: error instanceof Error ? error.message : String(error),
+						stack: error instanceof Error ? error.stack : undefined,
+					});
+				}
 			}
+			declared = tools.map((tool) => {
+				const description = descriptions.get(tool.name);
+				return description === undefined ? tool : { ...tool, description };
+			});
 		}
-		this.agent.state.tools = tools;
-		this._rebuildSystemPrompt(validToolNames);
+		this._hiddenDeclarations = hidden;
+		this.agent.state.tools = declared;
+		return declared;
 	}
 
 	/** Whether compaction or branch summarization is currently running */
@@ -1536,6 +1748,7 @@ export class AgentSession {
 		const toolSnippets: Record<string, string> = {};
 		for (const name of this._toolRegistry.keys()) {
 			const snippet = this._toolPromptSnippets.get(name);
+			// Tools without a snippet are not listed.
 			if (snippet) toolSnippets[name] = snippet;
 		}
 
@@ -1552,6 +1765,7 @@ export class AgentSession {
 			customPrompt: loaderSystemPrompt,
 			appendSystemPrompt,
 			selectedTools: validToolNames,
+			hiddenTools: [...this._hiddenDeclarations],
 			toolSnippets,
 			toolGuidelines: Object.fromEntries(this._toolPromptGuidelines),
 		});
@@ -1571,11 +1785,9 @@ export class AgentSession {
 		options: NormalizedBuildSystemPromptOptions,
 		messages: AgentMessage[] = this.agent.state.messages,
 	): SystemMessage | undefined {
-		options.selectedTools = [...new Set(options.selectedTools)].filter((name) => this._toolRegistry.has(name));
-		this.agent.state.tools = options.selectedTools.flatMap((name) => {
-			const tool = this._toolRegistry.get(name);
-			return tool ? [tool] : [];
-		});
+		options.selectedTools = this._applyToolLoadout(options.selectedTools).map((tool) => tool.name);
+		// The tool list and rules must match the declarations the request carries.
+		options.hiddenTools = [...this._hiddenDeclarations];
 		const sections = diffSystemPromptSections(
 			getCurrentSystemMessage(messages)?.sections ?? {},
 			buildSystemPromptSections(options),
@@ -1593,6 +1805,31 @@ export class AgentSession {
 	 * collapse into one head holding the forced text and the current tools. Runs after the
 	 * `context` extension handlers.
 	 */
+	/**
+	 * Remove the declarations that `prepareLoadout` hooks hide from every request. The whole
+	 * transcript is filtered with the current set, so the projected declarations stay consistent
+	 * across requests and only change when the loadout does.
+	 */
+	private _installHiddenDeclarationsProjection(): void {
+		const previousTransformContext = this.agent.transformContext;
+		this.agent.transformContext = async (messages, signal) => {
+			const transformed = previousTransformContext ? await previousTransformContext(messages, signal) : messages;
+			const hidden = this._hiddenDeclarations;
+			if (hidden.size === 0) return transformed;
+			return transformed.map((message) => {
+				if (message.role !== "system" || (!message.toolsAdded && !message.toolsRemoved)) return message;
+				const { toolsAdded, toolsRemoved, ...rest } = message;
+				const added = toolsAdded?.filter((tool) => !hidden.has(tool.name)) ?? [];
+				const removed = toolsRemoved?.filter((tool) => !hidden.has(tool.name)) ?? [];
+				return {
+					...rest,
+					...(added.length > 0 ? { toolsAdded: added } : {}),
+					...(removed.length > 0 ? { toolsRemoved: removed } : {}),
+				};
+			});
+		};
+	}
+
 	private _installAgentForcedPromptProjection(): void {
 		const previousTransformContext = this.agent.transformContext;
 		this.agent.transformContext = async (messages, signal) => {
@@ -1610,30 +1847,59 @@ export class AgentSession {
 		};
 	}
 
-	/** Restore the active tool loadout declared by the session transcript, if it declares one. */
-	private _restoreToolsFromTranscript(): void {
+	/**
+	 * Restore the active tool loadout declared by the session transcript, if it declares one.
+	 * Tools reachable only from other tools are never declared, but they do not depend on the active
+	 * set, so the transcript's declarations are the whole loadout.
+	 * @param modifiers `+name`/`-name` entries applied to the restored loadout.
+	 */
+	private _restoreToolsFromTranscript(modifiers: readonly string[] = []): void {
+		this._pendingToolNames.clear();
 		const current = getCurrentSystemMessage(this.sessionManager.buildSessionContext().messages);
 		if (!current) return;
-		const toolNames = (current.toolsAdded ?? [])
-			.map((tool) => tool.name)
-			.filter((name) => this._toolRegistry.has(name));
-		this.agent.state.tools = toolNames.flatMap((name) => {
-			const registered = this._toolRegistry.get(name);
-			return registered ? [registered] : [];
-		});
-		this._rebuildSystemPrompt(toolNames);
+		const names = applyToolModifiers(
+			(current.toolsAdded ?? []).map((tool) => tool.name),
+			modifiers,
+		);
+		this._pendingToolNames = new Set(names.filter((name) => this._isAllowedTool(name)));
+		this._setActiveTools(names);
 	}
 
 	// =========================================================================
 	// Prompting
 	// =========================================================================
 
-	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
+	/**
+	 * Start a run from a user or custom message. The session counts as busy from here on, so
+	 * messages sent while before_agent_start handlers run are queued into this run instead of
+	 * starting another, and an abort requested meanwhile aborts the run as soon as it exists.
+	 * @param onStarted Called once the run's messages are prepared, before the first request.
+	 */
+	private async _startRun(trigger: BeforeAgentStartTrigger, onStarted?: () => void): Promise<void> {
+		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
+		let messages: AgentMessage[];
+		try {
+			messages = await this._prepareRun(trigger);
+		} catch (error) {
+			this._isAgentRunActive = false;
+			this._flushPendingBashMessages();
+			this._flushPendingCustomMessages();
+			this._resolveIdleWaitIfIdle();
+			throw error;
+		}
+		// Messages held while the run was starting go before its starting messages, as they would
+		// have while idle. No run exists yet, so they cannot split a tool call from its result.
+		this._flushPendingBashMessages();
+		this._flushPendingCustomMessages();
+		onStarted?.();
+
 		// Compaction before the prompt may have scheduled a retry; the new prompt replaces it.
 		this._failedResponse = undefined;
 		this._recordSelection();
-		this._isAgentRunActive = true;
+		// The run records the loadout in the transcript; restored tools that did not register by now
+		// are dropped, so a tool that never registers does not stay pending.
+		this._pendingToolNames.clear();
 		try {
 			await this.agent.prompt(messages);
 			while (!this._agentRunAbortRequested) {
@@ -1654,6 +1920,65 @@ export class AgentSession {
 			this._flushPendingCustomMessages();
 			await this._emitAgentSettled();
 		}
+	}
+
+	/**
+	 * Prepare a run and return its starting messages: compact first when needed, emit
+	 * before_agent_start, apply the run's prompt options and tool loadout, and build the starting
+	 * message followed by pending nextTurn messages (consumed here) and handler messages, with a
+	 * system patch first when the prompt changed.
+	 */
+	private async _prepareRun(trigger: BeforeAgentStartTrigger): Promise<AgentMessage[]> {
+		// Check if we need to compact before sending (catches aborted responses).
+		// The starting message is sent below, so do not call agent.continue() here.
+		const lastAssistant = this._findLastAssistantMessage();
+		if (lastAssistant) {
+			await this._checkCompaction(lastAssistant, false);
+		}
+
+		const selectedToolsBefore = this._baseSystemPromptOptions.selectedTools;
+		const result = await this._extensionRunner.emitBeforeAgentStart(trigger, this._baseSystemPromptOptions);
+		// Handlers may edit event.systemPromptOptions.selectedTools or call setActiveTools(),
+		// which updates the live loadout instead. An explicit edit wins; otherwise the live
+		// loadout is authoritative, so a setActiveTools() call is not undone here.
+		const handlerEditedTools =
+			result.systemPromptOptions.selectedTools.length !== selectedToolsBefore.length ||
+			result.systemPromptOptions.selectedTools.some((name, index) => name !== selectedToolsBefore[index]);
+		if (!handlerEditedTools) result.systemPromptOptions.selectedTools = this.getActiveToolNames();
+
+		const messages: AgentMessage[] = [];
+		if (trigger.messageType === "custom") {
+			messages.push(trigger.message);
+		} else {
+			// Normalize images after before_agent_start so extension-driven model selection
+			// determines the resize profile used for the request and history.
+			const normalized = await this._normalizePromptImages(trigger.images);
+			const text =
+				normalized.hints.length > 0 ? `${trigger.prompt}\n\n${normalized.hints.join("\n")}` : trigger.prompt;
+			messages.push({
+				role: "user",
+				content: [{ type: "text", text }, ...normalized.images],
+				timestamp: Date.now(),
+			});
+		}
+		// Inject any pending "nextTurn" messages as context alongside the starting message
+		messages.push(...this._pendingNextTurnMessages);
+		this._pendingNextTurnMessages = [];
+		for (const msg of result.messages) {
+			messages.push({
+				role: "custom",
+				customType: msg.customType,
+				// Untyped extensions can pass null/missing content; normalize at ingestion.
+				content: msg.content ?? [],
+				display: msg.display,
+				details: msg.details,
+				timestamp: Date.now(),
+			});
+		}
+		const updateMessage = this._preparePromptAndToolLoadout(result.systemPromptOptions);
+		this._runSystemPromptOptions = result.systemPromptOptions;
+		if (updateMessage) messages.unshift(updateMessage);
+		return messages;
 	}
 
 	private async _handlePostAgentRun(): Promise<boolean> {
@@ -1822,14 +2147,14 @@ export class AgentSession {
 					"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
 				);
 			}
-			await this._queueNormalizedInput(expandedText, currentImages, options.streamingBehavior);
+			if (options.streamingBehavior === "followUp") {
+				await this._queueFollowUp(expandedText, currentImages);
+			} else {
+				await this._queueSteer(expandedText, currentImages);
+			}
 			preflightResult?.("queued");
 			return;
 		}
-
-		// Flush any pending bash and custom messages before the new prompt
-		this._flushPendingBashMessages();
-		this._flushPendingCustomMessages();
 
 		// Validate model
 		if (!this.model) {
@@ -1851,65 +2176,9 @@ export class AgentSession {
 			throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
 		}
 
-		// Check if we need to compact before sending (catches aborted responses).
-		// The user's new prompt is sent below, so do not call agent.continue() here.
-		const lastAssistant = this._findLastAssistantMessage();
-		if (lastAssistant) {
-			await this._checkCompaction(lastAssistant, false);
-		}
-
-		// Emit before_agent_start before normalizing images so extension-driven model
-		// selection determines the resize profile used for the request and history.
-		const selectedToolsBefore = this._baseSystemPromptOptions.selectedTools;
-		const result = await this._extensionRunner.emitBeforeAgentStart(
-			expandedText,
-			currentImages,
-			this._baseSystemPromptOptions,
+		await this._startRun({ messageType: "user", prompt: expandedText, images: currentImages }, () =>
+			preflightResult?.("started"),
 		);
-		// Handlers may edit event.systemPromptOptions.selectedTools or call setActiveTools(),
-		// which updates the live loadout instead. An explicit edit wins; otherwise the live
-		// loadout is authoritative, so a setActiveTools() call is not undone here.
-		const handlerEditedTools =
-			result.systemPromptOptions.selectedTools.length !== selectedToolsBefore.length ||
-			result.systemPromptOptions.selectedTools.some((name, index) => name !== selectedToolsBefore[index]);
-		if (!handlerEditedTools) result.systemPromptOptions.selectedTools = this.getActiveToolNames();
-
-		const normalized = await this._normalizePromptImages(currentImages);
-		const userText = normalized.hints.length > 0 ? `${expandedText}\n\n${normalized.hints.join("\n")}` : expandedText;
-
-		// Build messages only after hooks and image normalization have completed.
-		const messages: AgentMessage[] = [];
-		const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: userText }];
-		userContent.push(...normalized.images);
-		messages.push({
-			role: "user",
-			content: userContent,
-			timestamp: Date.now(),
-		});
-
-		// Inject any pending "nextTurn" messages as context alongside the user message
-		for (const msg of this._pendingNextTurnMessages) {
-			messages.push(msg);
-		}
-		this._pendingNextTurnMessages = [];
-
-		for (const msg of result.messages) {
-			messages.push({
-				role: "custom",
-				customType: msg.customType,
-				// Untyped extensions can pass null/missing content; normalize at ingestion.
-				content: msg.content ?? [],
-				display: msg.display,
-				details: msg.details,
-				timestamp: Date.now(),
-			});
-		}
-		const updateMessage = this._preparePromptAndToolLoadout(result.systemPromptOptions);
-		this._runSystemPromptOptions = result.systemPromptOptions;
-		if (updateMessage) messages.unshift(updateMessage);
-
-		preflightResult?.("started");
-		await this._runAgentPrompt(messages);
 	}
 
 	/**
@@ -1992,23 +2261,13 @@ export class AgentSession {
 
 		let expandedText = this._expandSkillCommand(processedInput.text);
 		expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
-		await this._queueNormalizedInput(expandedText, processedInput.images, behavior);
-		return "queued";
-	}
 
-	private async _queueNormalizedInput(
-		text: string,
-		images: ImageContent[] | undefined,
-		behavior: "steer" | "followUp",
-	): Promise<void> {
-		const normalized = await this._normalizePromptImages(images);
-		const normalizedText = normalized.hints.length > 0 ? `${text}\n\n${normalized.hints.join("\n")}` : text;
-		const normalizedImages = normalized.images.length > 0 ? normalized.images : undefined;
 		if (behavior === "steer") {
-			await this._queueSteer(normalizedText, normalizedImages);
+			await this._queueSteer(expandedText, processedInput.images);
 		} else {
-			await this._queueFollowUp(normalizedText, normalizedImages);
+			await this._queueFollowUp(expandedText, processedInput.images);
 		}
+		return "queued";
 	}
 
 	/**
@@ -2125,10 +2384,10 @@ export class AgentSession {
 			}
 		} else if (options?.triggerTurn) {
 			if (this._isEmittingAgentSettled) {
-				this._deferredSettledActions.push(async () => await this._runAgentPrompt(appMessage));
+				this._deferredSettledActions.push(async () => await this.sendCustomMessage(message, options));
 				return;
 			}
-			await this._runAgentPrompt(appMessage);
+			await this._startRun({ messageType: "custom", message: appMessage });
 		} else if (this.isStreaming) {
 			// Appending now would put the message between an assistant tool call and its
 			// result, which providers that validate message order reject on replay. Defer
@@ -2447,19 +2706,15 @@ export class AgentSession {
 	}
 
 	/**
-	 * Cycle thinking level.
+	 * Cycle to next thinking level.
 	 * @returns New level, or undefined if model doesn't support thinking
 	 */
-	cycleThinkingLevel(directionOrOptions: number | ModelMutationOptions = 1): ThinkingLevel | undefined {
+	cycleThinkingLevel(options: ModelMutationOptions = {}): ThinkingLevel | undefined {
 		if (!this.supportsThinking()) return undefined;
 
-		const direction = typeof directionOrOptions === "number" ? directionOrOptions : 1;
-		const options = typeof directionOrOptions === "number" ? {} : directionOrOptions;
 		const levels = this.getAvailableThinkingLevels();
-		const step = direction < 0 ? -1 : 1;
 		const currentIndex = levels.indexOf(this.thinkingLevel);
-		const baseIndex = currentIndex >= 0 ? currentIndex : step > 0 ? -1 : 0;
-		const nextIndex = (((baseIndex + step) % levels.length) + levels.length) % levels.length;
+		const nextIndex = (currentIndex + 1) % levels.length;
 		const nextLevel = levels[nextIndex];
 
 		this.setThinkingLevel(nextLevel, options);
@@ -3126,7 +3381,7 @@ export class AgentSession {
 	}> {
 		return entries.map((entry) => {
 			const source = this.getExtensionSourceLabel(entry.extensionPath);
-			const baseDir = entry.extensionPath.startsWith("<") ? undefined : dirname(entry.extensionPath);
+			const baseDir = isSyntheticPath(entry.extensionPath) ? undefined : dirname(entry.extensionPath);
 			return {
 				path: entry.path,
 				metadata: {
@@ -3140,7 +3395,7 @@ export class AgentSession {
 	}
 
 	private getExtensionSourceLabel(extensionPath: string): string {
-		if (extensionPath.startsWith("<")) {
+		if (isSyntheticPath(extensionPath)) {
 			return `extension:${extensionPath.replace(/[<>]/g, "")}`;
 		}
 		const base = basename(extensionPath);
@@ -3236,6 +3491,7 @@ export class AgentSession {
 				},
 				getActiveTools: () => this.getActiveToolNames(),
 				getAllTools: () => this.getAllTools(),
+				getSettings: () => this.settingsManager.getSettings(),
 				setActiveTools: (toolNames) => this.setActiveToolsByName(toolNames),
 				refreshTools: () => this._refreshToolRegistry(),
 				getCommands,
@@ -3278,6 +3534,8 @@ export class AgentSession {
 				},
 				getSystemPrompt: () => this.systemPrompt,
 				getSystemPromptOptions: () => this._baseSystemPromptOptions,
+				executeTool: (callerId, name, args, options) => this._executeNestedToolCall(callerId, name, args, options),
+				getCallableTools: () => this._getCallableTools(),
 			},
 			{
 				registerProvider: (name, config) => {
@@ -3305,12 +3563,13 @@ export class AgentSession {
 	}
 
 	private _refreshToolRegistry(options?: { activeToolNames?: string[]; includeAllExtensionTools?: boolean }): void {
-		const previousRegistryNames = new Set(this._toolRegistry.keys());
+		// Tools that were already activated on registration. A tool whose exposure changes to
+		// `direct` or `model-only` (for example from `hidden`) is activated like a new tool.
+		const previousActivatedOnRegistration = new Set(
+			[...this._toolRegistry.keys()].filter((name) => this._isActivatedOnRegistration(name)),
+		);
 		const previousActiveToolNames = this.getActiveToolNames();
-		const allowedToolNames = this._allowedToolNames;
-		const excludedToolNames = this._excludedToolNames;
-		const isAllowedTool = (name: string): boolean =>
-			(!allowedToolNames || allowedToolNames.has(name)) && !excludedToolNames?.has(name);
+		const allowedTools = this._allowedTools;
 
 		const registeredTools = this._extensionRunner.getAllRegisteredTools();
 		const allCustomTools = [
@@ -3319,15 +3578,15 @@ export class AgentSession {
 				definition,
 				sourceInfo: createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }),
 			})),
-		].filter((tool) => isAllowedTool(tool.definition.name));
+		].filter((tool) => this._isAllowedTool(tool.definition.name));
 		const definitionRegistry = new Map<string, ToolDefinitionEntry>(
 			Array.from(this._baseToolDefinitions.entries())
-				.filter(([name]) => isAllowedTool(name))
+				.filter(([name]) => this._isAllowedTool(name))
 				.map(([name, definition]) => [
 					name,
 					{
 						definition,
-						sourceInfo: createSyntheticSourceInfo(`<builtin:${name}>`, { source: "builtin" }),
+						sourceInfo: createSyntheticSourceInfo(`${BUILTIN_PATH_PREFIX}${name}`, { source: "builtin" }),
 					},
 				]),
 		);
@@ -3358,10 +3617,12 @@ export class AgentSession {
 		const wrappedExtensionTools = wrapRegisteredTools(allCustomTools, runner);
 		const wrappedBuiltInTools = wrapRegisteredTools(
 			Array.from(this._baseToolDefinitions.values())
-				.filter((definition) => isAllowedTool(definition.name))
+				.filter((definition) => this._isAllowedTool(definition.name))
 				.map((definition) => ({
 					definition,
-					sourceInfo: createSyntheticSourceInfo(`<builtin:${definition.name}>`, { source: "builtin" }),
+					sourceInfo: createSyntheticSourceInfo(`${BUILTIN_PATH_PREFIX}${definition.name}`, {
+						source: "builtin",
+					}),
 				})),
 			runner,
 		);
@@ -3374,27 +3635,41 @@ export class AgentSession {
 
 		const nextActiveToolNames = (
 			options?.activeToolNames ? [...options.activeToolNames] : [...previousActiveToolNames]
-		).filter((name) => isAllowedTool(name));
+		).filter((name) => this._isAllowedTool(name));
 
-		if (allowedToolNames) {
+		if (allowedTools) {
 			for (const toolName of this._toolRegistry.keys()) {
-				if (allowedToolNames.has(toolName)) {
+				// Naming or matching a tool activates it even when it is not active by default.
+				if (allowedTools(toolName) && this._isDeclarable(toolName)) {
 					nextActiveToolNames.push(toolName);
 				}
 			}
 		} else if (options?.includeAllExtensionTools) {
 			for (const tool of wrappedExtensionTools) {
-				nextActiveToolNames.push(tool.name);
+				if (this._isActivatedOnRegistration(tool.name)) nextActiveToolNames.push(tool.name);
 			}
 		} else if (!options?.activeToolNames) {
 			for (const toolName of this._toolRegistry.keys()) {
-				if (!previousRegistryNames.has(toolName)) {
+				if (!previousActivatedOnRegistration.has(toolName) && this._isActivatedOnRegistration(toolName)) {
 					nextActiveToolNames.push(toolName);
 				}
 			}
 		}
+		// Pending tools that are registered now become active.
+		nextActiveToolNames.push(...this._pendingToolNames);
 
-		this.setActiveToolsByName([...new Set(nextActiveToolNames)]);
+		this._setActiveTools([...new Set(nextActiveToolNames)]);
+	}
+
+	/** Whether activating the tool declares it to the model. */
+	private _isDeclarable(name: string): boolean {
+		const exposure = this._getToolExposure(name);
+		return exposure === "direct" || exposure === "model-only";
+	}
+
+	/** Whether registering the tool activates it, which declares it to the model. */
+	private _isActivatedOnRegistration(name: string): boolean {
+		return this._isDeclarable(name) && this._toolDefinitions.get(name)?.definition.defaultActive !== false;
 	}
 
 	private _buildRuntime(options: {
@@ -3456,12 +3731,25 @@ export class AgentSession {
 		const previousFlagValues = oldRunner.getFlagValues();
 		await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" });
 		oldRunner.invalidate();
+		const getDefaultTools = () =>
+			this._usesDefaultTools
+				? applyToolModifiers(
+						this.settingsManager.getDefaultTools() ?? DEFAULT_TOOL_NAMES,
+						this._defaultToolModifiers,
+					)
+				: [];
+		const previousDefaultTools = new Set(getDefaultTools());
 		await this.settingsManager.reload();
 		this.syncQueueModesFromSettings();
 		resetApiProviders();
 		await this._resourceLoader.reload();
+		// Activate tools newly added to defaultTools. Removed ones stay active, and tools disabled
+		// during the session stay disabled unless the setting newly adds them.
+		const addedDefaultTools = getDefaultTools().filter((name) => !previousDefaultTools.has(name));
+		// Tools the new extensions register later are pending until then.
+		for (const name of this.getActiveToolNames()) this._pendingToolNames.add(name);
 		this._buildRuntime({
-			activeToolNames: this.getActiveToolNames(),
+			activeToolNames: [...this.getActiveToolNames(), ...addedDefaultTools],
 			flagValues: previousFlagValues,
 			includeAllExtensionTools: true,
 		});
@@ -4072,7 +4360,8 @@ export class AgentSession {
 
 		// Create tool renderer if we have an extension runner (for custom tool HTML rendering)
 		const toolRenderer: ToolHtmlRenderer = createToolHtmlRenderer({
-			getToolDefinition: (name) => this.getToolDefinition(name),
+			getToolRenderers: (name) =>
+				this._extensionRunner.resolveToolRenderers(name, () => this.getToolDefinition(name)),
 			theme,
 			cwd: this.sessionManager.getCwd(),
 		});

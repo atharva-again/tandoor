@@ -51,8 +51,8 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 | `plan-mode/` | Claude Code-style plan mode for read-only exploration with `/plan` command and step tracking |
 | `tools.ts` | Interactive `/tools` command to enable/disable tools with session persistence |
 | `handoff.ts` | Transfer context to a new focused session via `/handoff <goal>` |
-| `resume-opencode/` | Publishable package that safely imports OpenCode user/assistant history via `/resume-opencode` |
-| `resume-codex/` | Publishable package that safely imports Codex CLI, desktop, and IDE history via `/resume-codex` |
+| `resume-opencode/` | Import OpenCode user/assistant history via `/resume-opencode` |
+| `resume-codex/` | Import Codex CLI, desktop, and IDE history via `/resume-codex` |
 | `qna.ts` | Extracts questions from last response into editor via `ctx.ui.setEditorText()` |
 | `status-line.ts` | Shows turn progress in footer via `ctx.ui.setStatus()` with themed colors |
 | `github-issue-autocomplete.ts` | Adds `#1234` issue completions by stacking a custom autocomplete provider that preloads open issues from `gh issue list` |
@@ -124,6 +124,7 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 |-----------|-------------|
 | `session-name.ts` | Name sessions for the session selector via `setSessionName` |
 | `bookmark.ts` | Bookmark entries with labels for `/tree` navigation via `setLabel` |
+| `codex-status.ts` | Fetch and render usage limits for the authenticated Codex account |
 
 ### Custom Providers
 

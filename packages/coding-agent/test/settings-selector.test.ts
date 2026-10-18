@@ -26,10 +26,12 @@ describe("SettingsSelectorComponent", () => {
 		const onExitOutputChange = vi.fn();
 		const onScrollbarChange = vi.fn();
 		const onCopyOnSelectChange = vi.fn();
+		const onWheelScrollLinesChange = vi.fn();
 		const config = {
 			fullscreenExitOutput: "transcript",
 			fullscreenScrollbar: "auto",
 			fullscreenCopyOnSelect: true,
+			fullscreenWheelScrollLines: 7,
 			warnings: {},
 			defaultModel: "not set",
 			availableDefaultModels: [],
@@ -41,6 +43,7 @@ describe("SettingsSelectorComponent", () => {
 			onFullscreenExitOutputChange: onExitOutputChange,
 			onFullscreenScrollbarChange: onScrollbarChange,
 			onFullscreenCopyOnSelectChange: onCopyOnSelectChange,
+			onFullscreenWheelScrollLinesChange: onWheelScrollLinesChange,
 		} as unknown as SettingsCallbacks;
 
 		const cycle = (label: string, count: number) => {
@@ -55,6 +58,9 @@ describe("SettingsSelectorComponent", () => {
 		expect(onScrollbarChange.mock.calls.flat()).toEqual(["always", "hidden", "auto"]);
 		cycle("Fullscreen copy on select", 2);
 		expect(onCopyOnSelectChange.mock.calls.flat()).toEqual([false, true]);
+		// #9758: custom values from settings.json stay in the cycle.
+		cycle("Fullscreen wheel scrolling", 3);
+		expect(onWheelScrollLinesChange.mock.calls.flat()).toEqual([10, "auto", 1]);
 	});
 
 	it("keeps the configured fixed theme marked while browsing", () => {

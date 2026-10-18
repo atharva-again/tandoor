@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { type BuiltinProvider, complete, getModels, getProviders } from "../src/compat.ts";
 import { getEnvApiKey } from "../src/env-api-keys.ts";
-import type { Api, Model, ProviderStreamOptions } from "../src/types.ts";
+import type { Api, KnownProvider, Model, ProviderStreamOptions } from "../src/types.ts";
 import { resolveApiKey } from "./oauth.ts";
 
 const githubCopilotToken = await resolveApiKey("github-copilot");
@@ -13,7 +13,7 @@ interface AnthropicLongCacheRetentionE2ECase {
 	apiKey: string | undefined;
 }
 
-function getE2EApiKey(provider: BuiltinProvider): string | undefined {
+function getE2EApiKey(provider: KnownProvider): string | undefined {
 	if (provider === "github-copilot") {
 		return githubCopilotToken;
 	}

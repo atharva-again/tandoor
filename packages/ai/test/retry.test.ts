@@ -62,6 +62,23 @@ describe("provider retry classification", () => {
 		expect(isRetryableAssistantError(fauxAssistantMessage("", { stopReason: "error", errorMessage }))).toBe(true);
 	});
 
+	it.each(["The pending stream has been canceled", "The pending stream has been canceled (caused by: socket closed)"])(
+		"matches HTTP/2 pending stream cancellation: %s",
+		(errorMessage) => {
+			// Regression for #10379.
+			expect(isRetryableAssistantError(fauxAssistantMessage("", { stopReason: "error", errorMessage }))).toBe(true);
+		},
+	);
+
+	it.each([
+		// Regression for #10965 (provider unknown, no status code in the message).
+		"The service is temporarily unavailable. Please retry later.",
+		// Bedrock ServiceUnavailableException as formatted by formatBedrockError.
+		"Service unavailable: The service is temporarily unavailable.",
+	])("matches service unavailable wording: %s", (errorMessage) => {
+		expect(isRetryableAssistantError(fauxAssistantMessage("", { stopReason: "error", errorMessage }))).toBe(true);
+	});
+
 	it("matches OpenAI Responses streams that end before terminal events", () => {
 		expect(
 			isRetryableAssistantError(
@@ -83,6 +100,19 @@ describe("provider retry classification", () => {
 				fauxAssistantMessage("", { stopReason: "error", errorMessage: "429 quota exceeded" }),
 			),
 		).toBe(false);
+	});
+
+	it("keeps the ChatGPT subscription usage limit non-retryable", () => {
+		const errorMessage =
+			'OpenAI API error (429): {"code":"subscription_sharing_usage_limit_exceeded","message":"Usage limit reached."}';
+		expect(isRetryableAssistantError(fauxAssistantMessage("", { stopReason: "error", errorMessage }))).toBe(false);
+	});
+
+	it.each([
+		"subscription_sharing_usage_unavailable: Usage cannot be checked.",
+		"subscription_sharing_user_unavailable: User cannot be loaded.",
+	])("retries temporary ChatGPT subscription errors: %s", (errorMessage) => {
+		expect(isRetryableAssistantError(fauxAssistantMessage("", { stopReason: "error", errorMessage }))).toBe(true);
 	});
 
 	it("classifies assistant error messages", () => {

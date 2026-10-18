@@ -78,7 +78,7 @@ Pi saves sessions automatically. Exit Pi, then resume the most recent session fo
 pi --continue
 ```
 
-Use `/resume` to choose another saved session. See [Continue or branch a session](sessions.md) for session naming, branching, compaction, export, and sharing.
+Use `/resume` to choose another saved session. See [Continue or branch a session](sessions.md) for session naming, branching, compaction, and export.
 
 ## Next steps
 

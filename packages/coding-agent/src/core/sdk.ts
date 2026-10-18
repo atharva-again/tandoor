@@ -16,8 +16,15 @@ import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
 import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
-import { SettingsManager } from "./settings-manager.ts";
+import {
+	applyToolModifiers,
+	DEFAULT_TOOL_NAMES,
+	getToolListError,
+	isToolModifier,
+	SettingsManager,
+} from "./settings-manager.ts";
 import { time } from "./timings.ts";
+import { createToolNameMatcher } from "./tool-name-matcher.ts";
 import {
 	createBashTool,
 	createCodingTools,
@@ -29,7 +36,6 @@ import {
 	createReadOnlyTools,
 	createReadTool,
 	createWriteTool,
-	type ToolName,
 	withFileMutationQueue,
 } from "./tools/index.ts";
 import { getBranchSelection } from "./virtual-models.ts";
@@ -64,16 +70,23 @@ export interface CreateAgentSessionOptions {
 	 */
 	noTools?: "all" | "builtin";
 	/**
-	 * Optional allowlist of tool names.
+	 * Optional allowlist of tool names or patterns, where `*` matches any characters.
 	 *
-	 * When omitted, pi uses the `defaultTools` setting for the initial built-in
+	 * When omitted, pi uses the resolved `defaultTools` setting for the initial
 	 * selection when configured. Otherwise it enables the default built-in tools
 	 * (read, bash, edit, write). Extension/custom tools remain enabled unless
-	 * `noTools` changes that default. When provided, only the listed tool names are
-	 * enabled.
+	 * `noTools` changes that default. When provided, only matching tools are
+	 * enabled. An empty list, like `noTools: "all"`, disables all tools.
+	 *
+	 * A list of only `+name` and `-name` entries is not an allowlist: it adds tools
+	 * to or removes them from the default selection, like the `defaultTools` setting.
+	 * These entries take exact names. Mixing them with plain entries throws.
 	 */
 	tools?: string[];
-	/** Optional denylist of tool names to disable. Applies after `tools` when both are provided. */
+	/**
+	 * Optional denylist of tool names or patterns to disable. Applies after `tools` when both are
+	 * provided.
+	 */
 	excludeTools?: string[];
 	/** Custom tools to register (in addition to built-in tools). */
 	customTools?: ToolDefinition[];
@@ -262,14 +275,21 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		thinkingLevel = clampThinkingLevel(model, thinkingLevel) as ThinkingLevel;
 	}
 
-	const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write"];
-	const configuredDefaultToolNames = settingsManager.getDefaultTools();
-	const allowedToolNames = options.tools ?? (options.noTools === "all" ? [] : undefined);
+	const toolListError = options.tools ? getToolListError(options.tools) : undefined;
+	if (toolListError) throw new Error(`Invalid tools option: ${toolListError}`);
+	const defaultToolNames = options.noTools ? [] : (settingsManager.getDefaultTools() ?? DEFAULT_TOOL_NAMES);
+	// A `tools` list of only `+name`/`-name` entries changes the default selection instead of
+	// replacing it, like the `defaultTools` setting.
+	const toolModifiers = options.tools?.some(isToolModifier) ? options.tools : undefined;
+	const selectedToolNames = toolModifiers ? applyToolModifiers(defaultToolNames, toolModifiers) : options.tools;
+	const allowedToolNames = toolModifiers
+		? options.noTools === "all"
+			? selectedToolNames
+			: undefined
+		: (options.tools ?? (options.noTools === "all" ? [] : undefined));
 	const excludedToolNames = options.excludeTools;
-	const excludedToolNameSet = excludedToolNames ? new Set(excludedToolNames) : undefined;
-	const initialActiveToolNames = (
-		options.tools ?? (options.noTools ? [] : (configuredDefaultToolNames ?? defaultActiveToolNames))
-	).filter((name) => !excludedToolNameSet?.has(name));
+	const isExcludedTool = excludedToolNames ? createToolNameMatcher(excludedToolNames) : undefined;
+	const initialActiveToolNames = (selectedToolNames ?? defaultToolNames).filter((name) => !isExcludedTool?.(name));
 
 	// Create convertToLlm wrapper that filters images if blockImages is enabled (defense-in-depth)
 	const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
@@ -447,6 +467,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		modelRuntime,
 		cacheWarmer,
 		initialActiveToolNames,
+		usesDefaultTools: (options.tools === undefined || toolModifiers !== undefined) && !options.noTools,
+		defaultToolModifiers: toolModifiers,
 		allowedToolNames,
 		excludedToolNames,
 		extensionRunnerRef,

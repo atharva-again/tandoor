@@ -40,8 +40,7 @@ function matchesNameFilter(session: SessionInfo, filter: NameFilter): boolean {
 
 function pinsFirst(sessions: SessionSelectorSession[]): SessionSelectorSession[] {
 	const pinned = sessions.filter((session) => session.pinned);
-	if (pinned.length === 0) return sessions;
-	return [...pinned, ...sessions.filter((session) => !session.pinned)];
+	return pinned.length === 0 ? sessions : [...pinned, ...sessions.filter((session) => !session.pinned)];
 }
 
 export function parseSearchQuery(query: string): ParsedSearchQuery {
@@ -177,7 +176,7 @@ export function filterAndSortSessions(
 
 	// Recent mode: filter only, keep incoming order.
 	if (sortMode === "recent") {
-		const filtered: SessionInfo[] = [];
+		const filtered: SessionSelectorSession[] = [];
 		for (const s of nameFiltered) {
 			const res = matchSession(s, parsed);
 			if (res.matches) filtered.push(s);

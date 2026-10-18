@@ -76,6 +76,9 @@ function createSession(options: {
 		},
 		sessionManager: {
 			getEntries: () => entries,
+			getEntryCount: () => entries.length,
+			getSessionId: () => "test-session",
+			getLeafId: () => null,
 			getSessionName: () => options.sessionName,
 			getCwd: () => "/tmp/project",
 		},
@@ -205,6 +208,16 @@ describe("FooterComponent width handling", () => {
 
 		const statsLine = stripAnsi(footer.render(120)[1]);
 		expect(statsLine).toContain("$1.250");
+	});
+
+	it("updates cached usage totals after an entry is appended", () => {
+		const usage = { input: 10, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0.5 } };
+		const session = createSession({ sessionName: "", usage });
+		const footer = new FooterComponent(session, createFooterData(1));
+		expect(stripAnsi(footer.render(120)[1])).toContain("$0.500");
+
+		session.sessionManager.getEntries().push({ type: "message", message: { role: "assistant", usage } } as never);
+		expect(stripAnsi(footer.render(120)[1])).toContain("$1.000");
 	});
 
 	it("shows the latest cache hit rate when cache usage is present", () => {

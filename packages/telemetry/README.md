@@ -32,6 +32,8 @@ Applications can use the in-memory reference or provide an adapter for OpenTelem
 
 ## Installation
 
+This fork does not publish npm packages. The command below installs the upstream package; to use this checkout, follow the local package artifact instructions in the repository [README](../../README.md#using-local-packages-outside-the-monorepo).
+
 ```bash
 npm install @earendil-works/pi-telemetry
 ```

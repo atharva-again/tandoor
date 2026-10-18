@@ -22,7 +22,7 @@ Extensions, prompt templates, and skills can add commands. The command menu in P
 |---|---|
 | `/new` | Start a new session |
 | `/resume` | Switch to another saved session |
-| `/refresh` | Reload the current session from disk |
+| `/refresh` | Reload the current session from its saved file |
 | `/name [name]` | Set the session display name, or show the current name when omitted |
 | `/session` | Show current session information and statistics |
 | `/tree` | Navigate the session tree |

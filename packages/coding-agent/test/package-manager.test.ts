@@ -124,6 +124,35 @@ describe("DefaultPackageManager", () => {
 			expect(result.extensions.some((r) => r.path === extPath && r.enabled)).toBe(true);
 		});
 
+		it("should resolve built-in extensions with user exclusions and project overrides", async () => {
+			const pm = new DefaultPackageManager({
+				cwd: tempDir,
+				agentDir,
+				settingsManager,
+				builtinExtensions: ["tool-search", "llama.cpp"],
+			});
+			const builtins = async () =>
+				(await pm.resolve()).extensions.map((r) => [r.path, r.enabled, r.metadata.source, r.metadata.scope]);
+
+			expect(await builtins()).toEqual([
+				["builtin:tool-search", true, "builtin", "user"],
+				["builtin:llama.cpp", true, "builtin", "user"],
+			]);
+
+			settingsManager.setExtensionPaths(["-builtin:tool-search"]);
+			settingsManager.setProjectExtensionPaths(["+builtin:tool-search", "-builtin:llama.cpp"]);
+			expect(await builtins()).toEqual([
+				["builtin:tool-search", true, "builtin", "project"],
+				["builtin:llama.cpp", false, "builtin", "project"],
+			]);
+
+			settingsManager.setProjectExtensionPaths([]);
+			expect(await builtins()).toEqual([
+				["builtin:tool-search", false, "builtin", "user"],
+				["builtin:llama.cpp", true, "builtin", "user"],
+			]);
+		});
+
 		it("should resolve skill paths from settings", async () => {
 			const skillDir = join(agentDir, "skills", "my-skill");
 			mkdirSync(skillDir, { recursive: true });
@@ -1583,6 +1612,37 @@ Content`,
 	});
 
 	describe("pattern filtering in top-level arrays", () => {
+		// #10765
+		it("should expand ~ in exclusion and exact patterns", async () => {
+			const previousHome = process.env.HOME;
+			process.env.HOME = tempDir;
+
+			try {
+				const skillsDir = join(tempDir, "extra", "skills");
+				for (const name of ["keep", "glob-excluded", "exact-excluded"]) {
+					mkdirSync(join(skillsDir, name), { recursive: true });
+					writeFileSync(join(skillsDir, name, "SKILL.md"), `---\nname: ${name}\ndescription: ${name}\n---\n`);
+				}
+
+				settingsManager.setSkillPaths([
+					"~/extra/skills",
+					"!~/extra/skills/glob-*",
+					"-~/extra/skills/exact-excluded",
+				]);
+
+				const result = await packageManager.resolve();
+				expect(result.skills.some((r) => isEnabled(r, "keep/SKILL.md"))).toBe(true);
+				expect(result.skills.some((r) => isDisabled(r, "glob-excluded/SKILL.md"))).toBe(true);
+				expect(result.skills.some((r) => isDisabled(r, "exact-excluded/SKILL.md"))).toBe(true);
+			} finally {
+				if (previousHome === undefined) {
+					delete process.env.HOME;
+				} else {
+					process.env.HOME = previousHome;
+				}
+			}
+		});
+
 		it("should exclude extensions with ! pattern", async () => {
 			const extDir = join(agentDir, "extensions");
 			mkdirSync(extDir, { recursive: true });
