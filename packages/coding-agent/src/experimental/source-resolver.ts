@@ -2,6 +2,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { extname, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { stripJsonComments } from "../utils/json.ts";
 
 // Node strips TypeScript natively, but it does not apply the workspace source
 // aliases from tsconfig.json. Internal source processes preload this resolver so
@@ -22,7 +23,7 @@ interface SourceAlias {
 
 const repositoryRoot = fileURLToPath(new URL("../../../..", import.meta.url));
 const tsconfigPath = resolve(repositoryRoot, "tsconfig.json");
-const tsconfig = JSON.parse(readFileSync(tsconfigPath, "utf8")) as TsConfig;
+const tsconfig = JSON.parse(stripJsonComments(readFileSync(tsconfigPath, "utf8"))) as TsConfig;
 const paths = tsconfig.compilerOptions?.paths;
 if (!paths) throw new Error(`Source runtime requires compilerOptions.paths in ${tsconfigPath}`);
 

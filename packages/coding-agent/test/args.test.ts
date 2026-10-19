@@ -145,6 +145,12 @@ describe("parseArgs", () => {
 			const result = parseArgs(["--models", "gpt-4o,claude-sonnet,gemini-pro"]);
 			expect(result.models).toEqual(["gpt-4o", "claude-sonnet", "gemini-pro"]);
 		});
+
+		// Issue #10334
+		test("ignores empty entries in --models", () => {
+			const result = parseArgs(["--models", "gpt-4o, ,claude-sonnet,"]);
+			expect(result.models).toEqual(["gpt-4o", "claude-sonnet"]);
+		});
 	});
 
 	// Issue #9045
@@ -449,6 +455,31 @@ describe("parseArgs", () => {
 		test("parses -t shorthand", () => {
 			const result = parseArgs(["-t", "read,bash"]);
 			expect(result.tools).toEqual(["read", "bash"]);
+		});
+
+		test("parses +name and -name tool modifiers", () => {
+			const result = parseArgs(["-t", "+tool_search,-write"]);
+			expect(result.tools).toEqual(["+tool_search", "-write"]);
+			expect(result.diagnostics).toEqual([]);
+		});
+
+		test("rejects tool names mixed with modifiers", () => {
+			const result = parseArgs(["--tools", "read,+tool_search"]);
+			expect(result.tools).toBeUndefined();
+			expect(result.diagnostics).toEqual([
+				{ type: "error", message: "--tools: tool names cannot be mixed with +name or -name entries" },
+			]);
+		});
+
+		test("rejects patterns in tool modifiers", () => {
+			const result = parseArgs(["-t", "+service__*"]);
+			expect(result.tools).toBeUndefined();
+			expect(result.diagnostics).toEqual([
+				{
+					type: "error",
+					message: "-t: +name and -name entries take exact tool names, not patterns: +service__*",
+				},
+			]);
 		});
 
 		test("parses --exclude-tools flag", () => {

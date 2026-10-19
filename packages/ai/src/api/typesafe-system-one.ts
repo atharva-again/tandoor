@@ -1,5 +1,6 @@
 import type { ClassifierFunction, ClassifierOptions } from "../types.ts";
-import { classifySystemOne, isRecord, type SystemOneTransport } from "./system-one-shared.ts";
+import { isRecord } from "./classifier-shared.ts";
+import { classifySystemOne, type SystemOneTransport } from "./system-one-shared.ts";
 
 /**
  * TypeSafe's native System One protocol. OpenRouter serves the same protocol,
@@ -10,9 +11,9 @@ const transport: SystemOneTransport = {
 	label: "System One API",
 	url: (model) => new URL("systemone", `${model.baseUrl.replace(/\/+$/u, "")}/`),
 	payload: (model, request) => ({ model: model.id, ...request }),
-	answers: (body) => {
+	output: (body) => {
 		if (!isRecord(body)) throw new Error("System One API returned an unexpected response");
-		return body.answers;
+		return body;
 	},
 };
 

@@ -10,6 +10,8 @@
 
 import type {
 	AgentMessage,
+	AgentTool,
+	AgentToolCallOutcome,
 	AgentToolResult,
 	AgentToolUpdateCallback,
 	ThinkingLevel,
@@ -24,6 +26,7 @@ import type {
 	ConstrainedSamplingConfig,
 	ImageApi,
 	ImageContent,
+	JsonValue,
 	Message,
 	Model,
 	OAuthCredentials,
@@ -73,6 +76,7 @@ import type {
 	SessionEntry,
 	SessionManager,
 } from "../session-manager.ts";
+import type { Settings } from "../settings-manager.ts";
 import type { SlashCommandInfo } from "../slash-commands.ts";
 import type { SourceInfo } from "../source-info.ts";
 import type { BuildSystemPromptOptions, NormalizedBuildSystemPromptOptions } from "../system-prompt.ts";
@@ -359,6 +363,36 @@ export interface ExtensionContext {
 	getSystemPrompt(): string;
 }
 
+/** Options for {@link ExtensionToolContext.executeTool}. */
+export interface ExecuteToolOptions {
+	/** Defaults to the calling tool's signal. */
+	signal?: AbortSignal;
+	/** Receives partial results of the nested tool, in addition to `tool_execution_update` events. */
+	onUpdate?: AgentToolUpdateCallback;
+}
+
+/**
+ * Context passed to tool `execute()` in a session: the extension context plus `executeTool()`
+ * for running other tools through the same validation, hooks, and permission checks as
+ * model-issued calls.
+ *
+ * A tool wrapped with `wrapToolDefinition()` without a context factory, such as a built-in tool
+ * created with `createBashTool()` and run in a plain `Agent` or called directly, gets no context.
+ */
+export interface ExtensionToolContext extends ExtensionContext {
+	/** Tools {@link executeTool} can call. */
+	readonly tools: readonly AgentTool[];
+	/**
+	 * Run another tool. The call gets the id `<calling id>/<n>`, and the `tool_call`, `tool_result`,
+	 * and `tool_execution_*` events carry `parentToolCallId`. It does not appear in the transcript;
+	 * a bounded record of it is kept as `nestedCalls` on the calling tool's result message.
+	 *
+	 * Never rejects for tool failures: unknown tools, validation errors, blocked calls, and thrown
+	 * errors come back as `isError: true`.
+	 */
+	executeTool(name: string, args: unknown, options?: ExecuteToolOptions): Promise<AgentToolCallOutcome>;
+}
+
 /**
  * Extended context for command handlers.
  * Includes session control methods only safe in user-initiated commands.
@@ -454,6 +488,71 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 	showImages: boolean;
 	/** Whether the current result is an error. */
 	isError: boolean;
+	/**
+	 * Milliseconds the tool's execution took, from the final result; `undefined` while it runs, when it did not run, or
+	 * for results stored before durations were recorded.
+	 */
+	durationMs: number | undefined;
+	/** Horizontal padding configured by the outputPad setting. Renderers with `renderShell: "self"` apply it themselves. */
+	outputPad: number;
+}
+
+/**
+ * How the model reaches a tool. "Callable" means callable from other tools through
+ * `ctx.executeTool()`.
+ *
+ * - `direct`: declared to the model while active, and callable while active.
+ * - `model-only`: declared to the model while active, never callable. Use it for orchestrating or
+ *   interactive tools.
+ * - `deferred`: callable whenever registered. Not declared to the model unless explicitly
+ *   activated; tool search can find it.
+ * - `hidden`: registered but unreachable. Activating it has no effect.
+ *
+ * `direct` and `model-only` tools are activated when they are registered; the others are not.
+ * The active tool set (`getActiveTools`/`setActiveTools`) is the set declared to the model.
+ */
+export type ToolExposure = "direct" | "model-only" | "deferred" | "hidden";
+
+/** A group of related tools that tool discovery can describe together. */
+export interface ToolNamespace {
+	/** For example `docs`. */
+	name: string;
+	/**
+	 * Other names that refer to the namespace where tools look it up by name, for example `docs`.
+	 */
+	aliases?: readonly string[];
+	/** Short summary shown once with the group in model-facing tool listings. */
+	description?: string;
+	/**
+	 * Longer usage guidance. Not part of tool listings; tools that describe the namespace on request
+	 * can return it.
+	 */
+	instructions?: string;
+}
+
+/** The tools of a session as {@link ToolDefinition.prepareLoadout} sees them. */
+export interface ToolLoadout {
+	/** Tools declared to the model (the active tools), in order, with their original descriptions. */
+	readonly declared: readonly AgentTool[];
+	/** Tools callable through `ctx.executeTool()`. */
+	readonly callable: readonly AgentTool[];
+	/** Every registered tool. */
+	readonly registered: readonly AgentTool[];
+	getExposure(name: string): ToolExposure;
+	getNamespace(name: string): ToolNamespace | undefined;
+	/** A tool's `promptGuidelines`. Hidden declarations leave them out of the system prompt. */
+	getPromptGuidelines(name: string): readonly string[];
+}
+
+/** Changes {@link ToolDefinition.prepareLoadout} makes to what the model sees. */
+export interface ToolLoadoutChanges {
+	/** Model-facing descriptions of declared tools, by tool name. */
+	descriptions?: Readonly<Record<string, string>>;
+	/**
+	 * Declared tools whose declarations requests leave out. They stay active and callable, and the
+	 * transcript still declares them, so the active set survives `/tree` and resume.
+	 */
+	hiddenDeclarations?: readonly string[];
 }
 
 /**
@@ -481,6 +580,42 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	prepareArguments?: (args: unknown) => Static<TParams>;
 
 	/**
+	 * JSON Schema of `structuredContent` in successful results. Tools that declare it should always
+	 * set `structuredContent`; programmatic callers then receive it instead of the text content.
+	 */
+	outputSchema?: TSchema;
+
+	/**
+	 * How the model reaches the tool. Default: `"direct"`. See {@link ToolExposure}.
+	 */
+	exposure?: ToolExposure;
+
+	/** Group the tool belongs to. */
+	namespace?: ToolNamespace;
+
+	/**
+	 * For tools that reach other tools: which tools a call with `input` may reach. `"all"`, or the words of the input that
+	 * may name them, where a word refers to a tool or namespace whose name it contains, so words may
+	 * over-match. Extensions that register tools late use it from their `tool_call` handler to finish
+	 * registering those tools before the call runs.
+	 */
+	reachesTools?: (input: Record<string, unknown>) => "all" | readonly string[];
+
+	/**
+	 * Whether registering the tool activates it. Default: `true` for `direct` and `model-only` tools;
+	 * other exposures are never activated on registration. A tool with `defaultActive: false` is
+	 * activated by naming it in `--tools` or the `defaultTools` setting, or with `setActiveTools()`.
+	 */
+	defaultActive?: boolean;
+
+	/**
+	 * Adjust how the loadout is presented to the model while this tool is active. Called whenever
+	 * the active tools change. Tools that orchestrate other tools use it, for example to list the
+	 * callable tools in their own description.
+	 */
+	prepareLoadout?: (loadout: ToolLoadout) => ToolLoadoutChanges | undefined;
+
+	/**
 	 * Per-tool execution mode override.
 	 * - "sequential": this tool must execute one at a time with other tool calls.
 	 * - "parallel": this tool can execute concurrently with other tool calls.
@@ -495,7 +630,7 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 		params: Static<TParams>,
 		signal: AbortSignal | undefined,
 		onUpdate: AgentToolUpdateCallback<TDetails> | undefined,
-		ctx: ExtensionContext,
+		ctx: ExtensionToolContext,
 	): Promise<AgentToolResult<TDetails>>;
 
 	/** Custom rendering for tool call display */
@@ -511,6 +646,17 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 }
 
 type AnyToolDefinition = ToolDefinition<any, any, any>;
+
+export type ToolRenderers = Pick<AnyToolDefinition, "renderShell" | "renderCall" | "renderResult">;
+
+/**
+ * Chooses how calls to a tool are drawn, including tools that are not registered. `next()` returns
+ * the renderers the remaining resolvers, then the registered tool, would use.
+ */
+export type ToolRendererResolver = (
+	toolName: string,
+	next: () => ToolRenderers | undefined,
+) => ToolRenderers | undefined;
 
 /**
  * Preserve parameter inference for standalone tool definitions.
@@ -749,18 +895,32 @@ export interface ProviderStreamEvent {
 	data: unknown;
 }
 
-/** Fired after user submits prompt but before agent loop. */
-export interface BeforeAgentStartEvent {
+interface BeforeAgentStartEventBase {
 	type: "before_agent_start";
-	/** The raw user prompt text (after expansion). */
-	prompt: string;
-	/** Images attached to the user prompt, if any. */
-	images?: ImageContent[];
 	/** The current system prompt, rendered from systemPromptOptions and earlier handler changes. */
 	readonly systemPrompt: string;
 	/** Mutable prompt sections. Later handlers observe mutations made by earlier handlers. */
 	systemPromptOptions: NormalizedBuildSystemPromptOptions;
 }
+
+/** A run started by a submitted prompt, RPC prompt, or `pi.sendUserMessage()`. */
+export interface BeforeAgentStartUserEvent extends BeforeAgentStartEventBase {
+	messageType: "user";
+	/** The raw user prompt text (after expansion). */
+	prompt: string;
+	/** Images attached to the user prompt, if any. */
+	images?: ImageContent[];
+}
+
+/** A run started by `pi.sendMessage(..., { triggerTurn: true })` while idle. */
+export interface BeforeAgentStartCustomEvent extends BeforeAgentStartEventBase {
+	messageType: "custom";
+	/** The custom message that starts the run. */
+	message: CustomMessage;
+}
+
+/** Fired before a run starts from a user message or an idle custom message with `triggerTurn`. */
+export type BeforeAgentStartEvent = BeforeAgentStartUserEvent | BeforeAgentStartCustomEvent;
 
 /** Fired when an agent loop starts */
 export interface AgentStartEvent {
@@ -838,6 +998,8 @@ export interface AgentBeforeSettleEvent extends BoundaryState {
 /** Fired after an agent run has fully settled and no automatic retry, compaction, or queued continuation will run. */
 export interface AgentSettledEvent {
 	type: "agent_settled";
+	/** Whether the run ended because it was aborted, for example with Escape. */
+	aborted: boolean;
 }
 
 export type UIPromptKind = "select" | "confirm" | "input" | "editor" | "custom";
@@ -900,6 +1062,8 @@ export interface ToolExecutionStartEvent {
 	toolCallId: string;
 	toolName: string;
 	args: any;
+	/** Set when another tool made this call. */
+	parentToolCallId?: string;
 }
 
 /** Fired during tool execution with partial/streaming output */
@@ -909,6 +1073,8 @@ export interface ToolExecutionUpdateEvent {
 	toolName: string;
 	args: any;
 	partialResult: any;
+	/** Set when another tool made this call. */
+	parentToolCallId?: string;
 }
 
 /** Fired when a tool finishes executing */
@@ -918,6 +1084,10 @@ export interface ToolExecutionEndEvent {
 	toolName: string;
 	result: any;
 	isError: boolean;
+	/** Milliseconds `execute()` took, measured with a monotonic clock; absent when the tool did not run. */
+	durationMs?: number;
+	/** Set when another tool made this call. */
+	parentToolCallId?: string;
 }
 
 // ============================================================================
@@ -988,7 +1158,14 @@ export type InputEventResult =
 
 interface ToolCallEventBase {
 	type: "tool_call";
+	/**
+	 * The call's id. For calls another tool made (with `parentToolCallId` set), pi assigns
+	 * `<parent id>/<n>`; such ids never appear as tool calls or tool results in the transcript, only
+	 * in the parent result's `nestedCalls` record.
+	 */
 	toolCallId: string;
+	/** Set when another tool issued this call. */
+	parentToolCallId?: string;
 }
 
 export interface BashToolCallEvent extends ToolCallEventBase {
@@ -1055,9 +1232,17 @@ export type ToolCallEvent =
 
 interface ToolResultEventBase {
 	type: "tool_result";
+	/** The call's id; `<parent id>/<n>` for nested calls, see `ToolCallEvent`. */
 	toolCallId: string;
+	/** Set when another tool issued this call. */
+	parentToolCallId?: string;
 	input: Record<string, unknown>;
 	content: (TextContent | ImageContent)[];
+	/**
+	 * Machine-readable result for tools that declare an `outputSchema`. Handlers that redact
+	 * `content` should also replace this; replacing `content` alone drops it.
+	 */
+	structuredContent?: JsonValue;
 	isError: boolean;
 	/** Usage from the tool execution itself, if available. */
 	usage?: Usage;
@@ -1255,9 +1440,15 @@ export type UserBashEventResult =
 			result: BashResult;
 	  };
 
+/**
+ * Changes a `tool_result` handler makes. Omitted fields stay as they are, except that replacing
+ * `content` without returning `structuredContent` drops the structured content, because it may no
+ * longer match. Return it along with `content` to keep it.
+ */
 export interface ToolResultEventResult {
 	content?: (TextContent | ImageContent)[];
 	details?: unknown;
+	structuredContent?: JsonValue;
 	isError?: boolean;
 	usage?: Usage;
 }
@@ -1493,6 +1684,9 @@ export interface ExtensionAPI {
 	/** Register a custom renderer for CustomEntry. Custom entries do not participate in LLM context. */
 	registerEntryRenderer<T = unknown>(customType: string, renderer: EntryRenderer<T>): void;
 
+	/** Choose how tool calls are drawn. Resolvers run in extension load order. */
+	registerToolRenderer(resolver: ToolRendererResolver): void;
+
 	// =========================================================================
 	// Actions
 	// =========================================================================
@@ -1532,13 +1726,19 @@ export interface ExtensionAPI {
 	/** Execute a shell command. */
 	exec(command: string, args: string[], options?: ExecOptions): Promise<ExecResult>;
 
-	/** Get the list of currently active tool names. */
+	/** Get the names of the active tools, which are the tools declared to the model. */
 	getActiveTools(): string[];
 
-	/** Get all configured tools with parameter schema, prompt guidelines, and source metadata. */
+	/** Get all configured tools with parameter schema, prompt guidelines, exposure, and source metadata. */
 	getAllTools(): ToolInfo[];
 
-	/** Set the active tools by name. */
+	/** Get a copy of the effective settings (global and project settings merged, with overrides). */
+	getSettings(): Settings;
+
+	/**
+	 * Set the active tools by name. Unknown and `hidden` tools are ignored. Tools with `deferred`
+	 * exposure stay callable from other tools whether active or not.
+	 */
 	setActiveTools(toolNames: string[]): void;
 
 	/** Get available slash commands in the current session. */
@@ -1785,11 +1985,30 @@ export type ExtensionFactory = (pi: ExtensionAPI) => void | Promise<void>;
 export type InlineExtension =
 	| ExtensionFactory
 	| {
-			/** Display name shown as `<inline:name>` in the startup Extensions list. */
+			/**
+			 * Display name shown as `<inline:name>` in the startup Extensions list and errors. With
+			 * `builtin`, the extension is named `builtin:name` in errors and diagnostics.
+			 */
 			name: string;
 			factory: ExtensionFactory;
 			/** Omit this extension from the startup Extensions list. */
 			hidden?: boolean;
+			/**
+			 * Leave this extension out when another extension registers a tool, command, or flag with a
+			 * name it registers during loading, instead of reporting a conflict. The built-in tool search
+			 * extension uses it when another extension provides its own `tool_search`. The factory still
+			 * runs, so it should only register tools, commands, flags, and event handlers.
+			 */
+			replaceable?: boolean;
+			/**
+			 * Supply the code of the `builtin:<name>` extension instead of loading as an inline extension.
+			 * `builtin:<name>` is an extension resource like a file: it loads by default, `pi config` lists
+			 * it, `-builtin:<name>` in the `extensions` setting and `--no-extensions` disable it, and
+			 * `-e builtin:<name>` loads it explicitly. It is hidden from the startup Extensions list and
+			 * loads after project trust is resolved, so it cannot handle `project_trust`. The CLI's built-in
+			 * extensions use it.
+			 */
+			builtin?: boolean;
 	  };
 
 // ============================================================================
@@ -1837,11 +2056,18 @@ export type GetSessionNameHandler = () => string | undefined;
 export type GetActiveToolsHandler = () => string[];
 
 /** Tool info with name, description, parameter schema, prompt guidelines, and source metadata. */
-export type ToolInfo = Pick<ToolDefinition, "name" | "description" | "parameters" | "promptGuidelines"> & {
+export type ToolInfo = Pick<
+	ToolDefinition,
+	"name" | "description" | "parameters" | "promptGuidelines" | "reachesTools"
+> & {
+	exposure: ToolExposure;
+	namespace?: ToolNamespace;
 	sourceInfo: SourceInfo;
 };
 
 export type GetAllToolsHandler = () => ToolInfo[];
+
+export type GetSettingsHandler = () => Settings;
 
 export type GetCommandsHandler = () => SlashCommandInfo[];
 
@@ -1903,6 +2129,7 @@ export interface ExtensionActions {
 	setLabel: SetLabelHandler;
 	getActiveTools: GetActiveToolsHandler;
 	getAllTools: GetAllToolsHandler;
+	getSettings: GetSettingsHandler;
 	setActiveTools: SetActiveToolsHandler;
 	refreshTools: RefreshToolsHandler;
 	getCommands: GetCommandsHandler;
@@ -1928,6 +2155,15 @@ export interface ExtensionContextActions {
 	compact: (options?: CompactOptions) => void;
 	getSystemPrompt: () => string;
 	getSystemPromptOptions?: () => BuildSystemPromptOptions;
+	/** Backs `ExtensionToolContext.executeTool()`. Without it, nested calls fail. */
+	executeTool?: (
+		callerId: string,
+		name: string,
+		args: unknown,
+		options: ExecuteToolOptions,
+	) => Promise<AgentToolCallOutcome>;
+	/** Backs `ExtensionToolContext.tools`. */
+	getCallableTools?: () => readonly AgentTool[];
 }
 
 /**
@@ -1967,10 +2203,13 @@ export interface Extension {
 	path: string;
 	resolvedPath: string;
 	hidden?: boolean;
+	/** See {@link InlineExtension}. */
+	replaceable?: boolean;
 	sourceInfo: SourceInfo;
 	handlers: Map<string, HandlerFn[]>;
 	tools: Map<string, RegisteredTool>;
 	messageRenderers: Map<string, MessageRenderer>;
+	toolRenderers?: ToolRendererResolver[];
 	markdownTransformer?: MarkdownTransformer;
 	entryRenderers?: Map<string, EntryRenderer>;
 	commands: Map<string, RegisteredCommand>;

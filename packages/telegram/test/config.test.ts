@@ -134,12 +134,14 @@ describe("telegram config", () => {
 
 describe("telegram bot commands", () => {
 	it("registers telegram-native commands plus the built-in pi commands", () => {
+		const telegramPiCommands = TELEGRAM_PI_COMMANDS.map((command) => command.command);
+
 		expect(TELEGRAM_NATIVE_COMMANDS.map((command) => command.command)).toEqual(["start", "help"]);
 		expect(TELEGRAM_PI_COMMANDS).toHaveLength(BUILTIN_SLASH_COMMANDS.length);
-		expect(TELEGRAM_BOT_COMMANDS).toHaveLength(TELEGRAM_NATIVE_COMMANDS.length + BUILTIN_SLASH_COMMANDS.length);
+		expect(TELEGRAM_BOT_COMMANDS).toHaveLength(TELEGRAM_NATIVE_COMMANDS.length + TELEGRAM_PI_COMMANDS.length);
 		expect(TELEGRAM_GROUP_COMMANDS.map((command) => command.command)).not.toContain("quit");
 		expect(PI_BUILTIN_SLASH_COMMANDS).toEqual(BUILTIN_SLASH_COMMANDS);
-		expect(TELEGRAM_PI_COMMANDS.map((command) => command.command)).toEqual(
+		expect(telegramPiCommands).toEqual(
 			BUILTIN_SLASH_COMMANDS.map((command) => (command.name === "scoped-models" ? "scoped_models" : command.name)),
 		);
 	});

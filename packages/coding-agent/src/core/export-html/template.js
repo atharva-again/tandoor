@@ -590,15 +590,7 @@
         switch (name) {
           case 'read': {
             const path = shortenPath(String(args.path || args.file_path || ''));
-            const offset = args.offset;
-            const limit = args.limit;
-            let display = path;
-            if (offset !== undefined || limit !== undefined) {
-              const start = offset ?? 1;
-              const end = limit !== undefined ? start + limit - 1 : '';
-              display += `:${start}${end ? `-${end}` : ''}`;
-            }
-            return `[read: ${display}]`;
+            return `[read: ${path}${formatReadLineRange(args.offset, args.limit)}]`;
           }
           case 'write':
             return `[write: ${shortenPath(String(args.path || args.file_path || ''))}]`;
@@ -842,6 +834,23 @@
         return null;
       }
 
+      // Mirrors ../tools/render-utils.ts.
+      function parseLineNumber(value) {
+        if (typeof value === 'string' && value.trim() !== '') value = Number(value);
+        return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+      }
+
+      function formatReadLineRange(offset, limit) {
+        if (offset == null && limit == null) return '';
+        const start = offset == null ? 1 : parseLineNumber(offset);
+        if (start === undefined) return '';
+        if (limit == null) return `:${start}`;
+        const count = parseLineNumber(limit);
+        if (count === undefined) return '';
+        const end = start + count - 1;
+        return `:${start}${end ? `-${end}` : ''}`;
+      }
+
       function getLanguageFromPath(filePath) {
         const ext = filePath.split('.').pop()?.toLowerCase();
         const extToLang = {
@@ -947,6 +956,21 @@
             '</div>';
         };
 
+// Calls this tool made to other tools, recorded without results.
+        const renderNestedCalls = () => {
+          const nested = result?.nestedCalls;
+          if (!nested || !Array.isArray(nested.calls) || nested.calls.length === 0) return '';
+          const icons = { ok: '✓', error: '✗', unfinished: '…' };
+          const lines = nested.calls.map(c => {
+            const args = c.arguments ? JSON.stringify(c.arguments) : `[arguments omitted, ${c.argumentsBytes} bytes]`;
+            const duration = c.durationMs !== undefined ? ` ${c.durationMs}ms` : '';
+            const error = c.error ? `\n    ${c.error.split('\n').join('\n    ')}` : '';
+            return `${icons[c.status] || '?'} ${c.name} ${args}${duration}${error}`;
+          });
+          const title = `Nested calls: ${nested.calls.length}${nested.complete ? '' : ' (incomplete record)'}`;
+          return formatExpandableOutput([title, ...lines].join('\n'), 1);
+        };
+
         const toolDomId = `tool-call-${escapeHtml(call.id)}`;
         let html = `<div class="tool-execution ${statusClass}" id="${toolDomId}">`;
         const args = call.arguments || {};
@@ -967,14 +991,10 @@
           }
           case 'read': {
             const filePath = str(args.file_path ?? args.path);
-            const offset = args.offset;
-            const limit = args.limit;
-
+            const readLineRange = formatReadLineRange(args.offset, args.limit);
             let pathHtml = filePath === null ? invalidArg : escapeHtml(shortenPath(filePath || ''));
-            if (filePath !== null && (offset !== undefined || limit !== undefined)) {
-              const startLine = offset ?? 1;
-              const endLine = limit !== undefined ? startLine + limit - 1 : '';
-              pathHtml += `<span class="line-numbers">:${startLine}${endLine ? '-' + endLine : ''}</span>`;
+            if (filePath !== null && readLineRange) {
+              pathHtml += `<span class="line-numbers">${escapeHtml(readLineRange)}</span>`;
             }
 
             html += `<div class="tool-header"><span class="tool-name">read</span> <span class="tool-path">${pathHtml}</span></div>`;
@@ -1080,6 +1100,7 @@
           }
         }
 
+        html += renderNestedCalls();
         html += '</div>';
         return html;
       }

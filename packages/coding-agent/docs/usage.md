@@ -58,7 +58,6 @@ Pi saves sessions automatically unless session persistence is disabled.
 
 - `/new` starts a new session.
 - `/resume` opens another saved session.
-- `/refresh` reloads the current session from disk after another client changes it.
 - `/name` gives the current session a recognizable name.
 - `/session` shows its file, ID, message count, token usage, and cost.
 
@@ -76,13 +75,13 @@ Prefix a command with `!` to run it and include its output in the conversation:
 
 Use `!!` when you want to run a command without sending its output to the model.
 
-## Copy, export, or share results
+## Copy or export results
 
 Press `Ctrl+X` or run `/copy` to copy the last assistant response. Use `/export` to save the session as HTML or JSONL.
 
 ## Adjust the terminal
 
-Regular mode uses the terminal's normal scrollback. Fullscreen mode keeps the editor and status area fixed while the transcript scrolls within the terminal window. Choose a mode through `/settings` or `--tui-mode`.
+Fullscreen mode, the default, keeps the editor and status area fixed while the transcript scrolls within the terminal window. Regular mode uses the terminal's normal scrollback. Choose a mode through `/settings` or `--tui-mode`.
 
 Terminal support for mouse input, keyboard shortcuts, and inline images varies. See [Terminal Setup](terminal-setup.md) for platform-specific configuration and [Keybindings](keybindings.md) for every configurable shortcut. Run `/hotkeys` to inspect the shortcuts active in your current session.
 

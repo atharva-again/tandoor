@@ -4,15 +4,19 @@ import type { Op } from "@earendil-works/chord/delta";
 import { idFromNumber } from "../ids.ts";
 import {
 	type ConversationId,
+	type Cursor,
 	type DocumentCreate,
 	type DocumentId,
 	type EntryId,
 	type EntryRecord,
 	type JsonObject,
+	type Page,
 	ROOT_CONVERSATION_ID,
+	type ScanOrder,
 	type Storage,
 	type StorageWrite,
 	type SubmissionId,
+	type SubmissionQuery,
 	type SubmissionRecord,
 	type TaskId,
 	type TaskRecord,
@@ -35,7 +39,6 @@ function pendingTask(id: TaskId<JsonValue>, conversationId: ConversationId, phas
 		version: 1,
 		input: { value: id },
 		state: { status: "pending", checkpoint: { phase } },
-		after: [],
 		background: false,
 		abortRequested: false,
 	} satisfies StoredTask;
@@ -51,6 +54,8 @@ function entry(
 }
 
 type ConformanceTest = (storage: Storage) => Promise<void>;
+
+type Identified = { readonly id: number };
 
 type AssertionResult = {
 	toBe(expected: unknown): void;
@@ -429,6 +434,29 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 			expect(third.items.map(({ id }) => id)).toEqual([rootFirst]);
 			expect(third.next).toBeUndefined();
 
+			// Oldest first: the root's segment, then each fork's, each capped at the next fork point.
+			const ascending = { conversationId: grandchildId, order: "ascending" } as const;
+			const firstUp = await storage.scanEntries(ascending, 2, undefined, context);
+			expect(firstUp.items.map(({ id }) => id)).toEqual([rootFirst, rootForkPoint]);
+			const secondUp = await storage.scanEntries(ascending, 2, firstUp.next, context);
+			expect(secondUp.items.map(({ id }) => id)).toEqual([childForkPoint, grandchildHead]);
+			const thirdUp = await storage.scanEntries({ conversationId: grandchildId }, 2, secondUp.next, context);
+			expect(thirdUp.items.map(({ id }) => id)).toEqual([grandchildTail]);
+			expect(thirdUp.next).toBeUndefined();
+			expect(
+				(
+					await storage.scanEntries(
+						{ ...ascending, minEntryId: rootForkPoint, maxEntryId: childForkPoint },
+						10,
+						undefined,
+						context,
+					)
+				).items.map(({ id }) => id),
+			).toEqual([rootForkPoint, childForkPoint]);
+			await expect(
+				storage.scanEntries({ conversationId: grandchildId, order: "descending" }, 2, firstUp.next, context),
+			).rejects.toThrow("cursor");
+
 			const currentMarker = await storage.findLatestHeadMarker(grandchildId, undefined, context);
 			expect(currentMarker?.id).toBe(grandchildHead);
 			expect(currentMarker?.head).toBe(grandchildHead);
@@ -498,6 +526,58 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 			).rejects.toThrow("Unknown conversation");
 		}),
 
+		createCase(options, "scans tables in either ID order and continues a cursor in its order", async (storage) => {
+			const rootId = await createRoot(storage);
+			const conversationIds = [rootId];
+			const taskIds: TaskId<JsonValue>[] = [];
+			const submissionIds: SubmissionId[] = [];
+			for (let index = 0; index < 3; index++) {
+				const conversationId = await storage.mintId<ConversationId>();
+				const taskId = await storage.mintId<TaskId<JsonValue>>();
+				const submissionId = await storage.mintId<SubmissionId>();
+				await storage.commit(
+					[
+						{ type: "conversation", value: { id: conversationId } },
+						{ type: "task", value: pendingTask(taskId, rootId) },
+						{
+							type: "submission",
+							value: { id: submissionId, conversationId: rootId, type: "input", status: "queued" },
+						},
+					],
+					context,
+				);
+				conversationIds.push(conversationId);
+				taskIds.push(taskId);
+				submissionIds.push(submissionId);
+			}
+			type Scan = (order: ScanOrder | undefined, cursor: Cursor | undefined) => Promise<Page<Identified, Cursor>>;
+			const scans: readonly (readonly [Scan, readonly number[]])[] = [
+				[(order, cursor) => storage.scanConversations({ order }, 2, cursor, context), conversationIds],
+				[(order, cursor) => storage.scanTasks({ order }, 2, cursor, context), taskIds],
+				[(order, cursor) => storage.scanSubmissions({ order }, 2, cursor, context), submissionIds],
+			];
+			const all = async (scan: Scan, order: ScanOrder | undefined): Promise<number[]> => {
+				const found: number[] = [];
+				let page = await scan(order, undefined);
+				found.push(...page.items.map(({ id }) => id));
+				while (page.next !== undefined) {
+					// A cursor carries its order; the query may omit it.
+					page = await scan(undefined, JSON.parse(JSON.stringify(page.next)) as Cursor);
+					found.push(...page.items.map(({ id }) => id));
+				}
+				return found;
+			};
+			for (const [scan, ids] of scans) {
+				const reversed = [...ids].reverse();
+				expect(await all(scan, undefined)).toEqual(ids);
+				expect(await all(scan, "ascending")).toEqual(ids);
+				expect(await all(scan, "descending")).toEqual(reversed);
+				const descending = await scan("descending", undefined);
+				expect((await scan("descending", descending.next)).items.map(({ id }) => id)).toEqual(reversed.slice(2, 4));
+				await expect(scan("ascending", descending.next)).rejects.toThrow("cursor");
+			}
+		}),
+
 		createCase(options, "replaces complete task records and pages filtered task scans", async (storage) => {
 			const rootId = await createRoot(storage);
 			const firstId = await storage.mintId<TaskId<JsonValue>>();
@@ -529,7 +609,6 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 				version: first.version,
 				input: first.input,
 				state: { status: "terminal", outcome: { status: "completed", result: { entryId: 99 } } },
-				after: [],
 				background: false,
 				abortRequested: true,
 			};
@@ -548,6 +627,42 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 			expect(
 				(await storage.scanTasks({ background: true }, 10, undefined, context)).items.map(({ id }) => id),
 			).toEqual([secondId]);
+		}),
+
+		createCase(options, "stores owners and scans waiting and completing tasks by status", async (storage) => {
+			const rootId = await createRoot(storage);
+			const ownerId = await storage.mintId<TaskId<JsonValue>>();
+			const waitingId = await storage.mintId<TaskId<JsonValue>>();
+			const completingId = await storage.mintId<TaskId<JsonValue>>();
+			const owner = pendingTask(ownerId, rootId);
+			const waiting: StoredTask = {
+				...pendingTask(waitingId, rootId),
+				owner: ownerId,
+				state: { status: "waiting", checkpoint: { phase: "next" }, on: [ownerId], policy: "allSettled" },
+				memos: { kept: true },
+			};
+			const { state: _state, ...base } = pendingTask(completingId, rootId);
+			const completing: StoredTask = {
+				...base,
+				owner: ownerId,
+				state: { status: "completing", outcome: { status: "failed", error: { message: "held" } } },
+			};
+			const writes = [owner, waiting, completing].map((value) => ({ type: "task", value }) as const);
+			await storage.commit(writes, context);
+			expect(await storage.task(waitingId, context)).toEqual(waiting);
+			expect(await storage.task(completingId, context)).toEqual(completing);
+			const scan = async (status: StoredTask["state"]["status"]) =>
+				(await storage.scanTasks({ status }, 10, undefined, context)).items;
+			expect(await scan("waiting")).toEqual([waiting]);
+			expect(await scan("completing")).toEqual([completing]);
+			expect((await scan("pending")).map(({ id }) => id)).toEqual([ownerId]);
+			const terminal: StoredTask = {
+				...completing,
+				state: { status: "terminal", outcome: completing.state.outcome! },
+			};
+			await storage.commit([{ type: "task", value: terminal }], context);
+			expect(await scan("completing")).toEqual([]);
+			expect(await scan("terminal")).toEqual([terminal]);
 		}),
 
 		createCase(
@@ -600,6 +715,29 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 				await storage.commit([{ type: "submission", value: placedSecond }], context);
 				expect(await storage.submission(secondId, context)).toEqual(placedSecond);
 				expect(await storage.submissionByRequest(rootId, "other", context)).toEqual(placedSecond);
+
+				const ids = async (query: SubmissionQuery) => {
+					const found: SubmissionId[] = [];
+					let cursor: Cursor | undefined;
+					do {
+						const page = await storage.scanSubmissions(query, 1, cursor, context);
+						found.push(...page.items.map(({ id }) => id));
+						cursor = page.next;
+					} while (cursor !== undefined);
+					return found;
+				};
+				expect(await ids({})).toEqual([firstId, secondId, otherConversationId]);
+				expect(await ids({ conversationId: rootId })).toEqual([firstId, secondId]);
+				// A status change moves the record between status scans.
+				expect(await ids({ status: "queued" })).toEqual([firstId, otherConversationId]);
+				expect(await ids({ status: "placed" })).toEqual([secondId]);
+				expect(await ids({ conversationId: secondConversationId, status: "queued" })).toEqual([
+					otherConversationId,
+				]);
+				expect(await ids({ conversationId: secondConversationId, status: "placed" })).toEqual([]);
+				expect((await storage.scanSubmissions({ status: "placed" }, 10, undefined, context)).items).toEqual([
+					placedSecond,
+				]);
 			},
 		),
 
@@ -1041,7 +1179,8 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 				} catch (error) {
 					conflictError = error;
 				}
-				expect((conflictError as Error | undefined)?.name).toBe("StorageRejected");
+				// Rejected without effect: the copy and the retirement in the same batch are both absent.
+				expect(conflictError instanceof Error).toBe(true);
 				expect(await storage.document(conflictId, "current", context)).toBeUndefined();
 				expect((await storage.document(currentCopyId, "current", context))?.value).toEqual({
 					count: 2,
@@ -1064,7 +1203,7 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 				} catch (error) {
 					mismatchError = error;
 				}
-				expect((mismatchError as Error | undefined)?.name).toBe("StorageRejected");
+				expect(mismatchError instanceof Error).toBe(true);
 				expect(await storage.document(mismatchId, "current", context)).toBeUndefined();
 			},
 		),

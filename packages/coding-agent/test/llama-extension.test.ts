@@ -46,7 +46,7 @@ describe("llama.cpp extension", () => {
 			process.cwd(),
 			createEventBus(),
 			runtime,
-			"<inline:llama.cpp>",
+			"builtin:llama.cpp",
 		);
 
 		expect(extension.commands.get("llama")?.description).toBe("Manage llama.cpp router models");
@@ -202,6 +202,85 @@ describe("llama.cpp extension", () => {
 		]);
 	});
 
+	it("preserves cached llama.cpp context for unloaded autoload presets", async () => {
+		let cachedEntry: ModelsStoreEntry | undefined;
+		let loaded = true;
+		let unloadedArgs: string[] | undefined;
+		const { url } = await listen((request, response) => {
+			if (request.url === "/models") {
+				json(response, {
+					data: [
+						loaded
+							? {
+									id: "qwen",
+									status: { value: "loaded" },
+									source: "preset",
+									meta: { n_ctx: 65536, n_ctx_train: 128000 },
+								}
+							: {
+									id: "qwen",
+									status: { value: "unloaded", ...(unloadedArgs && { args: unloadedArgs }) },
+									source: "preset",
+									meta: { n_ctx_train: 128000 },
+								},
+					],
+				});
+				return;
+			}
+			if (request.url === "/props?model=qwen&autoload=false") {
+				json(response, {});
+				return;
+			}
+			if (request.url === "/props") {
+				json(response, { role: "router", models_autoload: true });
+				return;
+			}
+			response.writeHead(404).end();
+		});
+
+		const publish = async (publication: ModelsPublication): Promise<boolean> => {
+			if (publication.persist === null) cachedEntry = undefined;
+			else if (publication.persist !== undefined) cachedEntry = structuredClone(publication.persist);
+			publication.update?.();
+			return true;
+		};
+		const storedContextWindows = () =>
+			cachedEntry?.models.map((model) => ("contextWindow" in model ? model.contextWindow : undefined));
+		const credential = { type: "api_key" as const, key: "local", env: { LLAMA_BASE_URL: url } };
+
+		const first = createLlamaProvider();
+		await first.provider.refreshModels?.({
+			credential,
+			stored: cachedEntry,
+			publish,
+			allowNetwork: true,
+			signal: new AbortController().signal,
+		});
+		expect(storedContextWindows()).toEqual([65536, 65536]);
+
+		loaded = false;
+		const second = createLlamaProvider();
+		await second.provider.refreshModels?.({
+			credential,
+			stored: cachedEntry,
+			publish,
+			allowNetwork: true,
+			signal: new AbortController().signal,
+		});
+		expect(second.provider.getModels()).toEqual([expect.objectContaining({ id: "qwen", contextWindow: 65536 })]);
+		expect(storedContextWindows()).toEqual([65536, 65536]);
+
+		unloadedArgs = ["llama-server", "--ctx-size", "32768"];
+		await second.provider.refreshModels?.({
+			credential,
+			stored: cachedEntry,
+			publish,
+			allowNetwork: true,
+			signal: new AbortController().signal,
+		});
+		expect(storedContextWindows()).toEqual([32768, 32768]);
+	});
+
 	it("exposes unloaded presets only when router autoload is enabled", async () => {
 		let propsRequests = 0;
 		const { url } = await listen((request, response) => {
@@ -301,6 +380,176 @@ describe("llama.cpp extension", () => {
 		expect(result.errorMessage).toBeUndefined();
 		expect(result.answers.kind).toMatchObject({ type: "choice", choice: "ci" });
 		expect(paths).toContain("/completion");
+	});
+
+	it("exposes decision models reported by the catalog as native System One classifiers", async () => {
+		const propsModels: string[] = [];
+		const systemOneRequests: unknown[] = [];
+		const { url } = await listen((request, response) => {
+			let body = "";
+			request.on("data", (chunk) => {
+				body += chunk;
+			});
+			request.on("end", () => {
+				const requestUrl = new URL(request.url ?? "", "http://localhost");
+				if (requestUrl.pathname === "/models") {
+					json(response, {
+						data: [
+							{
+								id: "qwen",
+								status: { value: "loaded" },
+								architecture: { input_modalities: ["text"], output_modalities: ["text"] },
+								meta: { n_ctx: 32768 },
+							},
+							{
+								id: "kev",
+								status: { value: "loaded" },
+								architecture: { input_modalities: ["text"], output_modalities: ["decisions"] },
+								meta: { n_ctx: 8192 },
+							},
+							{
+								id: "laya",
+								status: { value: "sleeping" },
+								architecture: { input_modalities: ["text"], output_modalities: ["decisions"] },
+							},
+							// Servers before llama.cpp 0.6.0 may omit architecture.
+							{ id: "legacy", status: { value: "loaded" } },
+						],
+					});
+					return;
+				}
+				if (requestUrl.pathname === "/props") {
+					propsModels.push(requestUrl.searchParams.get("model") ?? "");
+					json(response, {});
+					return;
+				}
+				if (requestUrl.pathname === "/v1/systemone") {
+					const payload = JSON.parse(body) as { model: string; questions: Record<string, unknown> };
+					systemOneRequests.push(payload);
+					json(response, {
+						model: payload.model,
+						answers: Object.fromEntries(
+							Object.keys(payload.questions).map((id) => [id, { type: "noul", noul: 0.82 }]),
+						),
+						usage: { input_tokens: 42, output_tokens: 0 },
+					});
+					return;
+				}
+				response.writeHead(404).end();
+			});
+		});
+
+		let cachedEntry: ModelsStoreEntry | undefined;
+		const publish = async (publication: ModelsPublication): Promise<boolean> => {
+			if (publication.persist !== undefined && publication.persist !== null) {
+				cachedEntry = structuredClone(publication.persist);
+			}
+			publication.update?.();
+			return true;
+		};
+		const credential = { type: "api_key" as const, key: "local", env: { LLAMA_BASE_URL: url } };
+		const controller = createLlamaProvider();
+		await controller.provider.refreshModels?.({
+			credential,
+			stored: undefined,
+			publish,
+			allowNetwork: true,
+			signal: new AbortController().signal,
+		});
+
+		// The catalog identifies decision models, so a refresh neither probes them nor reads their chat template.
+		expect(systemOneRequests).toEqual([]);
+		expect(propsModels.sort()).toEqual(["legacy", "qwen"]);
+		expect(controller.provider.getModels().map((model) => model.id)).toEqual(["qwen", "legacy"]);
+		expect(cachedEntry?.models.map((model) => [model.id, model.api, model.baseUrl])).toEqual([
+			["qwen", "openai-completions", `${url}/v1`],
+			["legacy", "openai-completions", `${url}/v1`],
+			["qwen", "llama-cpp-classify", url],
+			["kev", "typesafe-system-one", `${url}/v1`],
+			["laya", "typesafe-system-one", `${url}/v1`],
+			["legacy", "llama-cpp-classify", url],
+		]);
+
+		const kev = controller.provider.getAllModels?.().find((model) => model.id === "kev");
+		if (kev?.type !== "classifier") throw new Error("missing decision classifier model");
+		expect(kev.contextWindow).toBe(8192);
+		const result = await controller.provider.classify!(
+			kev,
+			{
+				state: { message: "I was charged twice." },
+				questions: {
+					angry: {
+						type: "bool",
+						instructions: "Is the customer angry?",
+						criteria: { true: "angry", false: "calm" },
+					},
+				},
+			},
+			{ apiKey: "local" },
+		);
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.answers.angry).toEqual({ type: "bool", probability: 0.82 });
+		expect(result.usage).toMatchObject({ input: 42, output: 0 });
+		expect(systemOneRequests).toEqual([
+			{
+				model: "kev",
+				state: { message: "I was charged twice." },
+				questions: {
+					angry: {
+						type: "noul",
+						instructions: "Is the customer angry?",
+						criteria: { true: "angry", false: "calm" },
+					},
+				},
+			},
+		]);
+
+		// A cache-only startup restores decision models with their native API.
+		const restored = createLlamaProvider();
+		await restored.provider.refreshModels?.({
+			credential,
+			stored: cachedEntry,
+			publish,
+			allowNetwork: false,
+			signal: new AbortController().signal,
+		});
+		expect(restored.provider.getModels().map((model) => model.id)).toEqual(["qwen", "legacy"]);
+		expect(
+			restored.provider
+				.getAllModels?.()
+				.filter((model) => model.type === "classifier")
+				.map((model) => [model.id, model.api]),
+		).toEqual([
+			["qwen", "llama-cpp-classify"],
+			["kev", "typesafe-system-one"],
+			["laya", "typesafe-system-one"],
+			["legacy", "llama-cpp-classify"],
+		]);
+	});
+
+	it("lists decision models that also output text for chat", () => {
+		const controller = createLlamaProvider();
+		controller.setCatalog(
+			[
+				{ id: "decide", status: { value: "sleeping" }, architecture: { output_modalities: ["decisions"] } },
+				{
+					id: "hybrid",
+					status: { value: "loaded" },
+					architecture: { output_modalities: ["text", "decisions"] },
+				},
+			],
+			"http://localhost:8080",
+		);
+		expect(controller.provider.getModels().map((model) => model.id)).toEqual(["hybrid"]);
+		expect(
+			controller.provider
+				.getAllModels?.()
+				.filter((model) => model.type === "classifier")
+				.map((model) => [model.id, model.api]),
+		).toEqual([
+			["decide", "typesafe-system-one"],
+			["hybrid", "typesafe-system-one"],
+		]);
 	});
 
 	it("hides unloaded presets when router autoload is disabled", async () => {

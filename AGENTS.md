@@ -22,6 +22,15 @@ Sync upstream selectively. Do not re-add these fork removals without asking the 
 
 Some upstream commits combine excluded features with general runtime or architecture changes. Do not revert such commits wholesale: omit only the excluded features and review unrelated fixes and architecture changes independently. The user intends to evaluate and potentially adopt the newer architecture once it is stable and trusted. Preserve the durable/Harness work, SQLite session backend, conditional cuts, and telemetry unless the user explicitly asks to change them.
 
+### Fork-only behavior
+
+- Preserve fork-only behavior during upstream sync unless the user explicitly asks to remove it. Determine where behavior originated from history or upstream comparison; presence in this fork alone does not make it fork-specific. Upstream-only behavior may be removed when upstream removes it. For ambiguous cases, ask before removing it.
+- Preserve the repository-root `README.md` as fork-maintained content. During upstream syncs, do not replace or rewrite it with upstream's README; only update its `Fork based on upstream Pi v...` marker to the synchronized upstream version unless the user explicitly asks for other README changes.
+- The current known fork-only inventory includes session pinning and its keybindings, `/refresh` (including Telegram registration and docs), the Codex/OpenCode resume extensions, the Codex status extension, `work_duration` session entries and their interactive, tree, and HTML rendering, and the `thermo-nuclear-code-quality-review/` package and review extension. This list is a minimum, not an exhaustive list. Do not delete the review package merely because it is absent upstream.
+- For example, the Daxnuts easter egg is not fork-only and need not be preserved when upstream removes it.
+- Do not add upstream-only release notes to a sync branch. If upstream release notes are retained for history, label them as upstream and make fork-specific feature exclusions clear.
+- Before declaring an upstream-sync review complete, compare the final worktree with `HEAD` and inspect staged and unstaged changes separately. Flag stale staged content, including conflict markers or staged additions of files removed from the final worktree. Do not commit or restage automatically.
+
 ## Conversational Style
 
 - Keep answers short and concise
@@ -64,11 +73,11 @@ Some upstream commits combine excluded features with general runtime or architec
 
 ## Dependency and Install Security
 
-- Treat npm dep and lockfile changes as reviewed code. Direct external deps stay pinned to exact versions.
+- Treat npm dep and lockfile changes as reviewed code. Direct registry deps, including internal workspace deps, stay pinned to exact versions.
 - When updating `undici`, you MUST read its changelog/release notes for the target version and evaluate whether any changes may affect functionality before applying the update.
 - Hydrate/update locally with `npm install --ignore-scripts`; clean/CI-style with `npm ci --ignore-scripts`. Don't run lifecycle scripts unless the user asks.
 - If dep metadata changes, refresh `package-lock.json` with `npm install --package-lock-only --ignore-scripts`.
-- If `packages/coding-agent/npm-shrinkwrap.json` needs regen, run `node scripts/generate-coding-agent-shrinkwrap.mjs` (verify with `--check` or `npm run check`). New deps with lifecycle scripts require review and an explicit allowlist entry in that script; never add one silently.
+- If `packages/coding-agent/install-lock/` needs regen, run `node scripts/generate-coding-agent-install-lock.mjs` (verify with `--check` or `npm run check`). New deps with lifecycle scripts require review and an explicit allowlist entry in that script; never add one silently.
 - Pre-commit blocks lockfile commits unless `PI_ALLOW_LOCKFILE_CHANGE=1`. Don't bypass unless the user wants the lockfile change committed.
 
 ## Git

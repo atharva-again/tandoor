@@ -256,18 +256,14 @@ describe("AgentSession actionable boundaries", () => {
 		});
 		harnesses.push(harness);
 		harness.session.subscribe((event) => {
-			if (
-				event.type === "entry_appended" &&
-				(event.entry.type === "custom" || event.entry.type === "custom_message")
-			) {
-				snapshots.push(JSON.stringify(harness.session.messages));
-			}
+			if (event.type === "entry_appended") snapshots.push(JSON.stringify(harness.session.messages));
 		});
 		harness.setResponses([fauxAssistantMessage("done")]);
 
 		await harness.session.prompt("start");
 
-		expect(snapshots).toHaveLength(2);
+		// Two extension entries and the fork's work-duration entry are published at the boundary.
+		expect(snapshots).toHaveLength(3);
 		expect(snapshots.every((snapshot) => snapshot.includes("committed context"))).toBe(true);
 	});
 
@@ -737,7 +733,8 @@ describe("AgentSession actionable boundaries", () => {
 		expect(harness.sessionManager.getEntries()).toContainEqual(
 			expect.objectContaining({ type: "custom", customType: "committed-after-abort", data: true }),
 		);
-		expect(harness.eventsOfType("agent_settled")).toHaveLength(1);
+		// #10607: settlement reports the abort although the last response succeeded.
+		expect(harness.eventsOfType("agent_settled")).toEqual([{ type: "agent_settled", aborted: true }]);
 	});
 });
 

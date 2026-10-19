@@ -93,6 +93,8 @@ class ReopeningStorage implements Storage {
 	scanTasks: Storage["scanTasks"] = (query, limit, cursor, readContext) =>
 		this.current.scanTasks(query, limit, cursor, readContext);
 	submission: Storage["submission"] = (id, readContext) => this.current.submission(id, readContext);
+	scanSubmissions: Storage["scanSubmissions"] = (query, limit, cursor, readContext) =>
+		this.current.scanSubmissions(query, limit, cursor, readContext);
 	submissionByRequest: Storage["submissionByRequest"] = (conversationId, requestId, readContext) =>
 		this.current.submissionByRequest(conversationId, requestId, readContext);
 	findDocument: Storage["findDocument"] = (address, at, readContext) =>
@@ -142,7 +144,6 @@ function pendingTask(id: TaskId<JsonValue>): TaskRecord<JsonValue, JsonValue, Js
 		version: 1,
 		input: null,
 		state: { status: "pending", checkpoint: { phase: "ready" } },
-		after: [],
 		background: false,
 		abortRequested: false,
 	};
@@ -187,6 +188,46 @@ describe("Pico SqliteStorage", () => {
 				context,
 			),
 		).toBe(3);
+	});
+
+	it("namespaces tables and indexes with a prefix across reopen", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-durable-sqlite-"));
+		tempDirectories.add(directory);
+		const path = join(directory, "storage.sqlite");
+		const host = new DatabaseSync(path);
+		try {
+			host.exec("CREATE TABLE tasks (text TEXT)");
+		} finally {
+			host.close();
+		}
+		const storage = await openNodeSqliteStorage(path, { prefix: "pi_" });
+		expect(await createRoot(storage)).toBe(1);
+		await storage.close(context);
+
+		const reopened = await openNodeSqliteStorage(path, { prefix: "pi_" });
+		openStorages.add(reopened);
+		expect(await reopened.conversation(ROOT_CONVERSATION_ID, context)).toEqual({ id: ROOT_CONVERSATION_ID });
+		const database = new DatabaseSync(path);
+		try {
+			const names = database
+				.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%'")
+				.all()
+				.map((row) => String(row.name));
+			expect(names.filter((name) => !name.startsWith("pi_"))).toEqual(["tasks"]);
+			expect(names).toContain("pi_tasks");
+		} finally {
+			database.close();
+		}
+	});
+
+	it("rejects an invalid prefix before creating the database", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-durable-sqlite-"));
+		tempDirectories.add(directory);
+		const databaseDirectory = join(directory, "nested");
+		await expect(
+			openNodeSqliteStorage(join(databaseDirectory, "storage.sqlite"), { prefix: "bad-prefix" }),
+		).rejects.toThrow("Invalid SQLite schema prefix");
+		await expect(stat(databaseDirectory)).rejects.toMatchObject({ code: "ENOENT" });
 	});
 
 	it("rejects persisted metadata corruption on reopen", async () => {

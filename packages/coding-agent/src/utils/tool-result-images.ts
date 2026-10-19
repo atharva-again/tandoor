@@ -14,7 +14,7 @@ export interface NormalizeToolResultImagesOptions {
  * Normalize image blocks returned by tool results.
  *
  * The `read` tool and `@file` CLI attachments run their images through `processImage`, but tools
- * that produce images themselves (extensions, MCP bridges, screenshot tools) hand back arbitrary
+ * that produce images themselves (extensions, screenshot tools) hand back arbitrary
  * base64 payloads that go straight into session history and every subsequent provider request.
  * Oversized images make the provider reject the whole conversation, not just the offending turn,
  * so normalize them once as they enter history.

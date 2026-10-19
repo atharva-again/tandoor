@@ -31,7 +31,7 @@ import type { InlineExtension } from "./core/extensions/types.ts";
 import { ModelRuntime } from "./core/model-runtime.ts";
 import { DefaultPackageManager } from "./core/package-manager.ts";
 import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
-import { DefaultResourceLoader } from "./core/resource-loader.ts";
+import { DefaultResourceLoader, isBuiltinExtension } from "./core/resource-loader.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { spawnProcess, spawnProcessSync, waitForChildProcess } from "./utils/child-process.ts";
@@ -134,6 +134,26 @@ function activateManagedRelease(managedRoot: string, version: string): void {
 	}
 }
 
+// Keep the active release and the one running this update, which other open
+// sessions likely still use and which allows rolling back by editing current-version.
+function pruneManagedReleases(managedRoot: string, activeVersion: string): void {
+	const releasesRoot = join(managedRoot, "releases");
+	let entries: string[];
+	try {
+		entries = readdirSync(releasesRoot);
+	} catch {
+		return;
+	}
+	for (const entry of entries) {
+		if (entry === activeVersion || entry === VERSION || !MANAGED_RELEASE_VERSION_RE.test(entry)) continue;
+		try {
+			rmSync(join(releasesRoot, entry), { force: true, recursive: true });
+		} catch {
+			// Files may be in use (e.g. loaded native modules on Windows); retry on the next update.
+		}
+	}
+}
+
 function cleanupManagedStaging(managedRoot: string): void {
 	const stagingRoot = join(managedRoot, "staging");
 	try {
@@ -198,6 +218,7 @@ async function runManagedSelfUpdate(managedRoot: string, version: string): Promi
 		if (existsSync(releaseDir)) {
 			verifyManagedRelease(releaseDir, version);
 			activateManagedRelease(managedRoot, version);
+			pruneManagedReleases(managedRoot, version);
 			return;
 		}
 
@@ -214,6 +235,7 @@ async function runManagedSelfUpdate(managedRoot: string, version: string): Promi
 		verifyManagedRelease(stageDir, version);
 		renameSync(stageDir, releaseDir);
 		activateManagedRelease(managedRoot, version);
+		pruneManagedReleases(managedRoot, version);
 	} finally {
 		if (stageDir) rmSync(stageDir, { force: true, recursive: true });
 		await releaseLock();
@@ -839,14 +861,18 @@ export async function handleConfigCommand(
 		return true;
 	}
 	reportSettingsErrors(settingsManager, "config command");
+	const builtinExtensions = (runtimeOptions.extensionFactories ?? [])
+		.filter(isBuiltinExtension)
+		.map((input) => input.name);
 	const globalSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
 	const globalResolvedPaths = await new DefaultPackageManager({
 		cwd,
 		agentDir,
 		settingsManager: globalSettingsManager,
+		builtinExtensions,
 	}).resolve();
 	const projectResolvedPaths = settingsManager.isProjectTrusted()
-		? await new DefaultPackageManager({ cwd, agentDir, settingsManager }).resolve()
+		? await new DefaultPackageManager({ cwd, agentDir, settingsManager, builtinExtensions }).resolve()
 		: globalResolvedPaths;
 
 	await selectConfig({
@@ -1089,6 +1115,13 @@ export async function handlePackageCommand(
 						return true;
 					}
 					console.log(chalk.green(`Updated ${APP_NAME} from ${VERSION} to ${selfUpdatePlan.version}`));
+					if (installMethod === "npm") {
+						console.log();
+						console.log(chalk.yellow(`This npm installation of ${APP_NAME} does not pin its dependencies.`));
+						console.log(
+							chalk.yellow("This fork does not provide a managed installer; update from a source checkout."),
+						);
+					}
 				}
 				return true;
 			}

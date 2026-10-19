@@ -1,8 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { setKeybindings } from "@earendil-works/pi-tui";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type { SessionInfo } from "../src/core/session-manager.ts";
 import { SessionSelectorComponent } from "../src/modes/interactive/components/session-selector.ts";
@@ -32,9 +29,6 @@ function makeSession(overrides: Partial<SessionInfo> & { id: string }): SessionI
 const CTRL_R = "\x1b[114;5u";
 
 describe("session selector rename", () => {
-	const tempDirs: string[] = [];
-	let pinStorePath: string;
-
 	beforeAll(() => {
 		initTheme("dark");
 	});
@@ -42,15 +36,6 @@ describe("session selector rename", () => {
 	beforeEach(() => {
 		// Ensure test isolation: keybindings are a global singleton
 		setKeybindings(new KeybindingsManager());
-		const tempDir = mkdtempSync(join(tmpdir(), "pi-session-selector-pin-store-"));
-		tempDirs.push(tempDir);
-		pinStorePath = join(tempDir, "session-pins.json");
-	});
-
-	afterEach(() => {
-		for (const dir of tempDirs.splice(0)) {
-			rmSync(dir, { recursive: true, force: true });
-		}
 	});
 
 	it("shows rename hint in interactive /resume picker configuration", async () => {
@@ -63,7 +48,7 @@ describe("session selector rename", () => {
 			() => {},
 			() => {},
 			() => {},
-			{ showRenameHint: true, keybindings, pinStorePath },
+			{ showRenameHint: true, keybindings },
 		);
 		await flushPromises();
 
@@ -82,7 +67,7 @@ describe("session selector rename", () => {
 			() => {},
 			() => {},
 			() => {},
-			{ showRenameHint: false, keybindings, pinStorePath },
+			{ showRenameHint: false, keybindings },
 		);
 		await flushPromises();
 
@@ -103,7 +88,7 @@ describe("session selector rename", () => {
 			() => {},
 			() => {},
 			() => {},
-			{ renameSession, showRenameHint: true, keybindings, pinStorePath },
+			{ renameSession, showRenameHint: true, keybindings },
 		);
 		await flushPromises();
 

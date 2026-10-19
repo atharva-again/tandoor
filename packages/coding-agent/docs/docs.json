@@ -48,6 +48,10 @@
               "path": "llama-cpp.md"
             },
             {
+              "title": "Run Local Models on NVIDIA RTX",
+              "path": "nvidia-rtx-llama-cpp.md"
+            },
+            {
               "title": "Configure Your Terminal",
               "path": "terminal-setup.md"
             },
@@ -149,7 +153,7 @@
           "path": "keybindings.md"
         },
         {
-          "title": "Provider Authentication",
+          "title": "Providers",
           "path": "providers.md"
         },
         {

@@ -64,8 +64,10 @@ export type {
 	AppKeybinding,
 	AutocompleteProviderFactory,
 	BashToolCallEvent,
+	BeforeAgentStartCustomEvent,
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
+	BeforeAgentStartUserEvent,
 	BeforeProviderHeadersEvent,
 	BeforeProviderRequestEvent,
 	BeforeProviderRequestEventResult,
@@ -90,6 +92,7 @@ export type {
 	EntryRenderOptions,
 	ExecOptions,
 	ExecResult,
+	ExecuteToolOptions,
 	Extension,
 	ExtensionActions,
 	ExtensionAPI,
@@ -104,6 +107,7 @@ export type {
 	ExtensionHandler,
 	ExtensionRuntime,
 	ExtensionShortcut,
+	ExtensionToolContext,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionVirtualModel,
@@ -170,7 +174,13 @@ export type {
 	ToolExecutionMode,
 	ToolExecutionStartEvent,
 	ToolExecutionUpdateEvent,
+	ToolExposure,
 	ToolInfo,
+	ToolLoadout,
+	ToolLoadoutChanges,
+	ToolNamespace,
+	ToolRendererResolver,
+	ToolRenderers,
 	ToolRenderResultOptions,
 	ToolResultEvent,
 	ToolResultEventResult,
@@ -301,6 +311,7 @@ export {
 	type FullscreenExitOutput,
 	type ImageSettings,
 	type PackageSource,
+	type QuietStartup,
 	type RetrySettings,
 	SettingsManager,
 	type SettingsManagerCreateOptions,
@@ -376,6 +387,7 @@ export {
 	type WriteToolOptions,
 	withFileMutationQueue,
 } from "./core/tools/index.ts";
+export { formatReadLineRange } from "./core/tools/render-utils.ts";
 export {
 	hasTrustRequiringProjectResources,
 	type ProjectTrustDecision,
@@ -391,6 +403,8 @@ export {
 	type VirtualModelDefinition,
 	type VirtualModelStateData,
 } from "./core/virtual-models.ts";
+// Built-in extensions. The CLI loads them; SDK sessions add them to their extension factories.
+export { createToolSearchExtension } from "./extensions/tool-search/index.ts";
 // Main entry point
 export { type MainOptions, main } from "./main.ts";
 // Run modes for programmatic SDK usage

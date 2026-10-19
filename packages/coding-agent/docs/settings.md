@@ -2,6 +2,8 @@
 
 This reference lists user-configurable settings, their types, defaults, and purposes. Project settings override agent-directory settings. Resource lists are combined. See [Configuration](configuration.md) for file locations and trust behavior.
 
+Add `"$schema": "https://pi.dev/schemas/settings.schema.json"` to `settings.json` for editor validation and completion.
+
 ## Model and thinking
 
 <a id="model-cycling"></a>
@@ -37,9 +39,23 @@ See [Choose a Model](models.md) for model selection and thinking controls.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `defaultTools` | `string[]` | `read`, `bash`, `edit`, `write` | Built-in tools enabled at startup. An empty array disables all built-in tools but not extension or SDK tools. |
+| `defaultTools` | `string[]` | `read`, `bash`, `edit`, `write` | Tools enabled at startup. Plain names replace the defaults; `+name` adds a tool and `-name` removes one. An empty array disables all built-in tools but not extension or SDK tools. |
 
-Available built-in tools are `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, and `ls`. CLI tool options override this setting for one invocation. See [Command Line](cli.md#tools).
+Available built-in tools are `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, and `ls`. `defaultTools` can also name `tool_search` and other extension tools registered inactive.
+
+A list of only `+name` and `-name` entries changes the inherited selection instead of replacing it. For example, this enables `tool_search` next to the default tools:
+
+```json
+{
+  "defaultTools": ["+tool_search"]
+}
+```
+
+This replaces `bash` with `powershell` and enables `grep`: `["-bash", "+powershell", "+grep"]`. Project settings apply on top of user settings: a project list with only `+name` and `-name` entries changes the user's selection, and a project list with a plain name replaces it. In one list, plain names form the selection, and `+name` and `-name` then apply in order.
+
+`/reload` enables tools newly added to `defaultTools`. It does not disable tools removed from it or re-enable unchanged tools you turned off. `--tools` with plain names, `--no-tools`, and `--no-builtin-tools` override `defaultTools`, also on reload.
+
+CLI tool options override this setting for one invocation. `--tools` with only `+name` and `-name` entries changes the resolved `defaultTools` selection instead, for example `pi --tools +tool_search`. On `/reload`, these entries apply to the reloaded setting too, so a tool removed with `-name` stays removed. See [Command Line](cli.md#tools).
 
 ## Sessions and context
 
@@ -74,15 +90,16 @@ See [Compaction Reference](compaction.md) for trigger, summarization, and valida
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `theme` | string | `"system"` | Built-in or custom theme name. `system` derives colors from the terminal theme. |
-| `quietStartup` | boolean | `false` | Hide the startup header. |
-| `tuiMode` | `"regular" \| "fullscreen"` | `"regular"` | Interactive terminal UI mode. |
+| `quietStartup` | boolean \| `"header"` | `false` | `true` hides the startup header and loaded-resource listing. `"header"` keeps the header (version and key hints) but hides the model scope line and loaded-resource listing. |
+| `tuiMode` | `"regular" \| "fullscreen"` | `"fullscreen"` | Interactive terminal UI mode. |
 | `fullscreenExitOutput` | `"transcript" \| "resume-hint"` | `"transcript"` | Output printed when fullscreen mode exits. |
 | `fullscreenScrollbar` | `"auto" \| "always" \| "hidden"` | `"auto"` | Fullscreen transcript scrollbar behavior. |
 | `fullscreenCopyOnSelect` | boolean | `true` | Copy selected text automatically in fullscreen mode. |
+| `fullscreenWheelScrollLines` | `"auto"` \| number | `"auto"` | Lines per mouse-wheel event in fullscreen mode, from 1 to 100. `"auto"` moves one line per event in local macOS terminals, which already accelerate wheel and trackpad input; elsewhere, and over SSH, it speeds up fast wheel spins to at most 6 lines per event. Alt+wheel moves five times as far. |
 | `editorPaddingX` | number | `0` | Horizontal editor padding from 0 to 3 cells. |
-| `outputPad` | `0 \| 1` | `1` | Horizontal transcript padding. |
+| `outputPad` | `0 \| 1` | `1` | Horizontal transcript padding for messages, tool output, `!` command output, and summary blocks. |
 | `autocompleteMaxVisible` | number | `5` | Visible autocomplete entries, from 3 to 20. |
-| `showHardwareCursor` | boolean | `false` | Show the terminal cursor while Pi positions it for input methods. |
+| `showHardwareCursor` | boolean | `false` | Use the terminal cursor instead of Pi's drawn cursor. Pi still positions it for input methods. |
 | `terminal.showImages` | boolean | `true` | Display inline images when supported. |
 | `terminal.imageWidthCells` | number | `60` | Preferred inline image width in terminal cells. |
 | `terminal.clearOnShrink` | boolean | `false` | Clear empty rows when rendered content shrinks. |
@@ -139,6 +156,8 @@ Resource paths in user settings resolve from the agent directory. Paths in proje
 | `enableSkillCommands` | boolean | `true` | Register skills as `/skill:name` commands. |
 
 Resource arrays support glob exclusions with `!pattern`, exact inclusion with `+path`, and exact exclusion with `-path`. Pi loads resources listed in both user-level and project settings.
+
+The built-in extensions are named `builtin:llama.cpp` and `builtin:tool-search` in `extensions`. They load by default. A `+builtin:<name>` or `-builtin:<name>` entry in project settings overrides the user setting. `pi config` lists them under Built-in. `--no-extensions` disables them too, and `-e builtin:<name>` loads one explicitly.
 
 ## Updates, telemetry, and warnings
 

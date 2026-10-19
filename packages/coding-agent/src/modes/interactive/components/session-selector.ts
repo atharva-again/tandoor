@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import * as os from "node:os";
+import { join } from "node:path";
 import {
 	type Component,
 	Container,
@@ -13,6 +14,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
+import { getAgentDir } from "../../../config.ts";
 import { KeybindingsManager } from "../../../core/keybindings.ts";
 import type { SessionInfo, SessionListProgress } from "../../../core/session-manager.ts";
 import { SessionPinStore } from "../../../core/session-pin-store.ts";
@@ -67,6 +69,7 @@ class SessionSelectorHeader implements Component {
 	private requestRender: () => void;
 	private loading = false;
 	private loadProgress: { loaded: number; total: number } | null = null;
+	private showPath = false;
 	private confirmingDeletePath: string | null = null;
 	private statusMessage: { type: "info" | "error"; message: string } | null = null;
 	private statusTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -99,6 +102,10 @@ class SessionSelectorHeader implements Component {
 
 	setProgress(loaded: number, total: number): void {
 		this.loadProgress = { loaded, total };
+	}
+
+	setShowPath(showPath: boolean): void {
+		this.showPath = showPath;
 	}
 
 	setShowRenameHint(show: boolean): void {
@@ -166,6 +173,7 @@ class SessionSelectorHeader implements Component {
 			hintLine1 = theme.fg(color, truncateToWidth(this.statusMessage.message, width, "…"));
 			hintLine2 = "";
 		} else {
+			const pathState = this.showPath ? "(on)" : "(off)";
 			const sep = theme.fg("muted", " · ");
 			const hint1 =
 				keyHint("tui.input.tab", "scope") + sep + theme.fg("muted", 're:<pattern> regex · "phrase" exact');
@@ -174,6 +182,7 @@ class SessionSelectorHeader implements Component {
 				keyHint("app.session.toggleNamedFilter", "named"),
 				keyHint("app.session.togglePin", "pin"),
 				keyHint("app.session.delete", "delete"),
+				keyHint("app.session.togglePath", `path ${pathState}`),
 			];
 			if (this.showRenameHint) {
 				hint2Parts.push(keyHint("app.session.rename", "rename"));
@@ -251,7 +260,7 @@ function buildSessionTree(sessions: SessionSelectorSession[]): SessionTreeNode[]
 		updateSubtreeMetadata(root);
 	}
 
-	// Pin selected subtrees, then sort by latest activity in each subtree (descending)
+	// Keep pinned sessions and their containing threads ahead of recent activity.
 	const sortNodes = (nodes: SessionTreeNode[]): void => {
 		nodes.sort((a, b) => {
 			if (a.hasPinned !== b.hasPinned) return a.hasPinned ? -1 : 1;
@@ -307,6 +316,7 @@ class SessionList implements Component, Focusable {
 	private sortMode: SortMode = "threaded";
 	private nameFilter: NameFilter = "all";
 	private keybindings: KeybindingsManager;
+	private showPath = false;
 	private confirmingDeletePath: string | null = null;
 	private currentSessionCanonicalPath?: string;
 	public onSelect?: (sessionPath: string) => void;
@@ -316,6 +326,7 @@ class SessionList implements Component, Focusable {
 	public onToggleSort?: () => void;
 	public onToggleNameFilter?: () => void;
 	public onTogglePin?: (pinPath: string, pinned: boolean) => void;
+	public onTogglePath?: (showPath: boolean) => void;
 	public onDeleteConfirmationChange?: (path: string | null) => void;
 	public onDeleteSession?: (sessionPath: string) => Promise<void>;
 	public onRenameSession?: (sessionPath: string) => void;
@@ -393,11 +404,8 @@ class SessionList implements Component, Focusable {
 		);
 		this.filterSessions(this.searchInput.getValue());
 		if (selectedPath) {
-			const selectedCanonicalPath = canonicalizePath(selectedPath) ?? selectedPath;
-			const nextIndex = this.filteredSessions.findIndex(
-				(node) => (canonicalizePath(node.session.path) ?? node.session.path) === selectedCanonicalPath,
-			);
-			if (nextIndex >= 0) this.selectedIndex = nextIndex;
+			const selectedIndex = this.filteredSessions.findIndex((node) => node.session.path === selectedPath);
+			if (selectedIndex >= 0) this.selectedIndex = selectedIndex;
 		}
 	}
 
@@ -505,8 +513,11 @@ class SessionList implements Component, Focusable {
 			if (this.showCwd && session.cwd) {
 				rightPart = `${shortenPath(session.cwd)} ${rightPart}`;
 			}
+			if (this.showPath) {
+				rightPart = `${shortenPath(session.path)} ${rightPart}`;
+			}
 
-			// Cursor and pin marker
+			// Cursor
 			const cursor = isSelected ? theme.fg("accent", "› ") : "  ";
 			const pinMarker = session.pinned ? theme.fg("warning", "◆ ") : "  ";
 
@@ -607,6 +618,13 @@ class SessionList implements Component, Focusable {
 					selected.session.pinPath ?? canonicalizePath(selected.session.path) ?? selected.session.path;
 				this.onTogglePin?.(pinPath, !selected.session.pinned);
 			}
+			return;
+		}
+
+		// Ctrl+P: toggle path display
+		if (kb.matches(keyData, "app.session.togglePath")) {
+			this.showPath = !this.showPath;
+			this.onTogglePath?.(this.showPath);
 			return;
 		}
 
@@ -792,25 +810,25 @@ export class SessionSelectorComponent extends Container implements Focusable {
 		onCancel: () => void,
 		onExit: () => void,
 		requestRender: () => void,
-		options: {
+		options?: {
 			renameSession?: (sessionPath: string, currentName: string | undefined) => Promise<void>;
 			showRenameHint?: boolean;
 			keybindings?: KeybindingsManager;
-			pinStorePath: string;
+			pinStorePath?: string;
 		},
 		currentSessionFilePath?: string,
 	) {
 		super();
-		this.keybindings = options.keybindings ?? KeybindingsManager.create();
+		this.keybindings = options?.keybindings ?? KeybindingsManager.create();
 		this.currentSessionsLoader = currentSessionsLoader;
 		this.allSessionsLoader = allSessionsLoader;
 		this.requestRender = requestRender;
-		this.pinStore = new SessionPinStore(options.pinStorePath);
+		this.pinStore = new SessionPinStore(options?.pinStorePath ?? join(getAgentDir(), "session-pins.json"));
 		this.header = new SessionSelectorHeader(this.scope, this.sortMode, this.nameFilter, this.requestRender);
-		const renameSession = options.renameSession;
+		const renameSession = options?.renameSession;
 		this.renameSession = renameSession;
 		this.canRename = !!renameSession;
-		this.header.setShowRenameHint(options.showRenameHint ?? this.canRename);
+		this.header.setShowRenameHint(options?.showRenameHint ?? this.canRename);
 
 		// Create session list (starts empty, will be populated after load)
 		this.sessionList = new SessionList(
@@ -848,6 +866,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 		this.sessionList.onToggleScope = () => this.toggleScope();
 		this.sessionList.onToggleSort = () => this.toggleSortMode();
 		this.sessionList.onToggleNameFilter = () => this.toggleNameFilter();
+		this.sessionList.onTogglePin = (pinPath, pinned) => this.togglePin(pinPath, pinned);
 		this.sessionList.onRenameSession = (sessionPath) => {
 			if (!renameSession) return;
 			if (this.scope === "current" ? this.currentLoad : this.allLoad) return;
@@ -856,11 +875,12 @@ export class SessionSelectorComponent extends Container implements Focusable {
 			const session = sessions.find((s) => s.path === sessionPath);
 			this.enterRenameMode(sessionPath, session?.name);
 		};
-		this.sessionList.onTogglePin = (pinPath, pinned) => {
-			this.togglePin(pinPath, pinned);
-		};
 
 		// Sync list events to header
+		this.sessionList.onTogglePath = (showPath) => {
+			this.header.setShowPath(showPath);
+			this.requestRender();
+		};
 		this.sessionList.onDeleteConfirmationChange = (path) => {
 			this.header.setConfirmingDeletePath(path);
 			this.requestRender();
@@ -886,7 +906,6 @@ export class SessionSelectorComponent extends Container implements Focusable {
 				} catch (error) {
 					pinCleanupError = error instanceof Error ? error.message : String(error);
 				}
-
 				if (this.currentSessions) {
 					this.currentSessions = this.currentSessions.filter((s) => s.path !== sessionPath);
 				}
@@ -946,11 +965,19 @@ export class SessionSelectorComponent extends Container implements Focusable {
 			this.allSessions = updateSessions(this.allSessions);
 			this.sessionList.setSessionPinned(pinPath, pinned);
 			this.header.setStatusMessage({ type: "info", message: pinned ? "Session pinned" : "Session unpinned" }, 2000);
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
 			this.header.setStatusMessage({ type: "error", message: `Failed to update pin: ${message}` }, 3000);
 		}
 		this.requestRender();
+	}
+
+	private withPins(sessions: SessionInfo[]): SessionSelectorSession[] {
+		const pinnedPaths = this.pinStore.getPinnedSessionPaths();
+		return sessions.map((session) => {
+			const pinPath = canonicalizePath(session.path) ?? session.path;
+			return { ...session, pinPath, pinned: pinnedPaths.has(pinPath) };
+		});
 	}
 
 	private enterRenameMode(sessionPath: string, currentName: string | undefined): void {
@@ -1027,7 +1054,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 		const onProgress: SessionListProgress = (loaded, total, partialSessions) => {
 			if (!isActive()) return;
 			if (partialSessions) {
-				const sessions = [...partialSessions];
+				const sessions = this.withPins([...partialSessions]);
 				if (scope === "current") {
 					this.currentSessions = sessions;
 				} else {
@@ -1045,11 +1072,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 				? this.currentSessionsLoader(onProgress, controller.signal)
 				: this.allSessionsLoader(onProgress, controller.signal));
 			if (!isActive()) return;
-			const pinnedPaths = this.pinStore.getPinnedSessionPaths();
-			const sessions: SessionSelectorSession[] = loadedSessions.map((session) => {
-				const pinPath = canonicalizePath(session.path) ?? session.path;
-				return { ...session, pinPath, pinned: pinnedPaths.has(pinPath) };
-			});
+			const sessions = this.withPins(loadedSessions);
 
 			if (scope === "current") {
 				this.currentSessions = sessions;

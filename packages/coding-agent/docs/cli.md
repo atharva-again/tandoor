@@ -57,18 +57,18 @@ RPC mode rejects `@file` arguments. JSON and RPC modes reserve stdout for protoc
 pi --model sonnet:high
 ```
 
-See [Choose a Model](models.md) for model selection and [Provider Authentication](providers.md) for credentials.
+See [Choose a Model](models.md) for model selection and [Providers](providers.md) for credentials.
 
 - `--provider <name>`<br>
-  Restricts `--model` lookup to one provider.
+  Restricts `--model` lookup to one provider. It requires `--model`.
 - `--model <pattern>`<br>
-  Selects by exact ID or fuzzy ID/name match. It accepts `provider/id` and an optional `:<thinking>` suffix.
+  Selects by exact ID or fuzzy ID/name match. It accepts `provider/id` and an optional `:<thinking>` suffix. If several providers match, Pi prefers the one with credentials, otherwise it asks for `--provider`.
 - `--api-key <key>`<br>
-  Uses a non-persistent API-key override. It requires a model selected through `--model` or `--models`.
+  Uses a non-persistent API-key override. It requires a model selected through `--model` or `--models`. It does not choose between providers that offer the same model.
 - `--thinking <level>`<br>
   Sets `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. It overrides a `--model` suffix and is clamped to the model's capabilities.
 - `--models <patterns>`<br>
-  Sets a comma-separated scope for startup and cycling. It accepts exact IDs, fuzzy matches, case-insensitive globs, and optional `:<thinking>` suffixes.
+  Sets a comma-separated scope for startup and cycling. It accepts exact IDs, fuzzy matches, case-insensitive globs, and optional `:<thinking>` suffixes. A model offered by several providers is added for each, with a warning.
 - `--list-models [search]`<br>
   Lists available models, optionally filtered by a fuzzy search, then exits.
 
@@ -116,15 +116,15 @@ pi --tools read,grep,find,ls --print "Review this project"
 See [Settings](settings.md#tools) for configuring the default tool selection.
 
 - `-t`, `--tools <list>`<br>
-  Replaces the default selection with a comma-separated allowlist of built-in, extension, or custom tools.
+  Replaces the default selection with a comma-separated allowlist of built-in, extension, or custom tools. Entries are tool names or patterns where `*` matches any characters. A list of only `+name` and `-name` entries is not an allowlist; it changes the default selection instead.
 - `-xt`, `--exclude-tools <list>`<br>
-  Disables comma-separated tool names after all other selection options.
+  Disables comma-separated tool names or patterns after all other selection options.
 - `-nbt`, `--no-builtin-tools`<br>
   Disables default built-in tools while retaining extension and custom tools.
 - `-nt`, `--no-tools`<br>
   Starts with all built-in, extension, and custom tools disabled.
 
-Default enabled tools are `read`, `bash`, `edit`, and `write`, unless `defaultTools` changes them.
+Default enabled tools are `read`, `bash`, `edit`, and `write`, unless `defaultTools` changes them. `--tools` with plain names replaces the whole selection, so name every tool you want. Like `defaultTools`, it also accepts a list of only `+name` and `-name` entries, which adds tools to or removes them from the default selection: `pi --tools +tool_search,-write` keeps the other default tools, enables tool search, and disables `write`. These entries take exact tool names, not `*` patterns; use `--exclude-tools` to disable tools by pattern. Plain names and `+name`/`-name` entries cannot be mixed. `/reload` enables tools newly added to `defaultTools`, but a tool removed with `-name` stays removed.
 
 | Built-in | Purpose |
 |---|---|
@@ -137,6 +137,16 @@ Default enabled tools are `read`, `bash`, `edit`, and `write`, unless `defaultTo
 | `find` | Find paths using glob patterns |
 | `ls` | List directory contents |
 
+The built-in tool-search extension adds one tool, which is off by default. Enable it by naming it in `--tools` or `defaultTools`.
+
+| Built-in extension | Purpose |
+|---|---|
+| `tool_search` | Search deferred tool metadata and declare matching tools for the next model call |
+
+### Tool search
+
+`tool_search` is off by default; enable it with `"defaultTools": ["+tool_search"]` or `--tools`. It ranks deferred tools and declares matching tools for the next model call. Loaded tools are recorded in the session like other tool changes, so they stay declared on that branch.
+
 <a id="resource-options"></a>
 
 ## Resources
@@ -148,9 +158,9 @@ pi --extension ./review.ts
 See [Configuration](configuration.md) for conventional directories and project trust, [Settings](settings.md#resources) for configured paths, and [Pi Packages](packages.md) for package sources.
 
 - `-e`, `--extension <path>`<br>
-  Loads an extension file or directory and is repeatable.
+  Loads an extension file or directory, or a built-in extension such as `builtin:llama.cpp`, and is repeatable.
 - `-ne`, `--no-extensions`<br>
-  Disables discovered and configured extensions. Explicit `-e` paths still load.
+  Disables discovered, configured, and built-in extensions. Explicit `-e` paths still load.
 - `--skill <path>`<br>
   Loads a skill file or directory and is repeatable.
 - `-ns`, `--no-skills`<br>
@@ -185,7 +195,7 @@ See [Configuration](configuration.md) for saved configuration, [Security](securi
 - `--append-system-prompt <text|path>`<br>
   Appends text or an existing file to the system prompt and is repeatable.
 - `--tui-mode <mode>`<br>
-  Uses `regular` or `fullscreen` terminal mode.
+  Uses `fullscreen` (default) or `regular` terminal mode.
 - `--verbose`<br>
   Shows verbose interactive startup information, overriding `quietStartup`.
 - `-a`, `--approve`<br>
@@ -234,6 +244,8 @@ Running `pi update` without a target updates Pi itself.
 
 Add `--force` to reinstall Pi when the selected update includes Pi.
 
+`pi update` cannot update Pi when another package manager provides it, such as Nix. Update Pi with that package manager, for example `nix profile upgrade pi`. Package and model catalog updates still work.
+
 ### Aliases and command options
 
 - `pi uninstall <source>` is an alias for `pi remove <source>`.
@@ -248,7 +260,7 @@ Add `--force` to reinstall Pi when the selected update includes Pi.
 pi auth check --provider openai --json
 ```
 
-Authentication commands require `--provider <provider>` or `--model <model>`. See [Provider Authentication](providers.md) for supported methods.
+Authentication commands require `--provider <provider>` or `--model <model>`. See [Providers](providers.md) for supported methods.
 
 | Command | Description |
 |---|---|

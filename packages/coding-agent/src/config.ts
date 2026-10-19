@@ -172,6 +172,9 @@ function getSelfUpdateCommandForMethod(
 			const [command = "npm", ...npmArgs] = npmCommand ?? [];
 			const inferred = npmCommand?.length ? undefined : getInferredNpmInstall();
 			const prefixArgs = [...npmArgs, ...(inferred ? ["--prefix", inferred.prefix] : [])];
+			// pi.dev advertises releases immediately, so a configured npm age gate would
+			// block the update. npm has no per-package age gate, so this also lets new
+			// transitive dependency releases through. Managed installs avoid this.
 			const installStep = makeSelfUpdateCommandStep(command, [
 				...prefixArgs,
 				"install",
@@ -476,6 +479,29 @@ export function getBundledInteractiveAssetPath(name: string): string {
 	return join(getInteractiveAssetsDir(), name);
 }
 
+export type InstallChange = { kind: "updated"; version: string } | { kind: "removed" };
+
+/**
+ * Detect that the package this process runs from changed on disk, for example after `pi update`
+ * in another terminal. Code loaded on demand can then be missing or from another version.
+ *
+ * Checks the package.json read at startup. Resolving it again would walk up past a deleted install
+ * and could find an unrelated package.json, such as one in the home directory.
+ */
+export function detectInstallChange(packageJsonPath = startupPackageJsonPath): InstallChange | undefined {
+	// The Bun binary embeds its code, so replacing the executable does not affect this process.
+	if (isBunBinary || !packageJsonPath) return undefined;
+	let installed: PackageJson;
+	try {
+		installed = JSON.parse(stripBom(readFileSync(packageJsonPath, "utf-8"))) as PackageJson;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "ENOENT" ? { kind: "removed" } : undefined;
+	}
+	return installed.version && installed.version !== VERSION
+		? { kind: "updated", version: installed.version }
+		: undefined;
+}
+
 // =============================================================================
 // App Config (from package.json piConfig)
 // =============================================================================
@@ -490,8 +516,12 @@ interface PackageJson {
 }
 
 let pkg: PackageJson = {};
+/** The package.json this process started from, if one existed. */
+let startupPackageJsonPath: string | undefined;
 try {
-	pkg = JSON.parse(stripBom(readFileSync(getPackageJsonPath(), "utf-8"))) as PackageJson;
+	const packageJsonPath = getPackageJsonPath();
+	pkg = JSON.parse(stripBom(readFileSync(packageJsonPath, "utf-8"))) as PackageJson;
+	startupPackageJsonPath = packageJsonPath;
 } catch (e: unknown) {
 	const err = e as NodeJS.ErrnoException;
 	if (err.code !== "ENOENT") throw e;
