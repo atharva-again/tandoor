@@ -258,7 +258,7 @@ describe("Anthropic preferred strict tool fallback", () => {
 		expect(payloads.map((payload) => (payload.tools as BetaTool[])[0].strict)).toEqual([true, undefined, true]);
 	});
 
-	it("preserves prefer through pi-messages so the gateway's Anthropic adapter can fall back", async () => {
+	it("preserves prefer through pi-messages so a gateway's Anthropic adapter can fall back", async () => {
 		const { payloads, options } = harness((_payload, attempt) =>
 			attempt === 1 ? errorResponse() : successResponse(),
 		);
@@ -266,12 +266,12 @@ describe("Anthropic preferred strict tool fallback", () => {
 		const gatewayModel: Model<"pi-messages"> = {
 			...model,
 			api: "pi-messages",
-			provider: "radius",
-			baseUrl: "https://radius.example/v1",
+			provider: "test-gateway",
+			baseUrl: "https://gateway.example/v1",
 			compat: undefined,
 		};
 		const result = await streamPiMessages(gatewayModel, transcript, {
-			apiKey: "radius-test",
+			apiKey: "gateway-test",
 			fetch: async (_input, init) => {
 				const request = JSON.parse(init?.body as string) as { context: TranscriptContext };
 				expect(request.context).toEqual(JSON.parse(JSON.stringify(transcript)));
