@@ -39,14 +39,6 @@
 	"exclude": [
 		"**/dist/**",
 		"packages/coding-agent/examples/extensions/gondolin/**",
-		// These incomplete pre-v1.3 experimental entrypoints reference code removed by the sync.
-		"packages/coding-agent/src/experimental/**",
-		"packages/coding-agent/src/cli/experimental/**",
-		"packages/coding-agent/test/experimental-*.test.ts",
-		// Retained 0.87.x integrations use APIs that the v1.3.0 workspace no longer provides.
-		"packages/client/**",
-		"packages/protocol/**",
-		"packages/server/**",
 		"packages/telegram/**"
 	]
 }
