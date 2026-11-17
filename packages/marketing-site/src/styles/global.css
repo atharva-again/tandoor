@@ -115,12 +115,102 @@ button:focus-visible {
   overflow-wrap: anywhere;
 }
 
-.footer-logo {
+.footer-mascot {
   display: block;
   flex: 0 0 auto;
   width: min(320px, 100%);
+  aspect-ratio: 1;
+  position: relative;
+  justify-self: center;
+  grid-area: logo;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.footer-mascot:focus-visible {
+  outline-offset: 5px;
+  border-radius: 50%;
+}
+
+.footer-logo {
+  display: block;
+  position: relative;
+  z-index: 1;
+  width: 100%;
   height: auto;
   object-fit: contain;
+  pointer-events: none;
+}
+
+.mascot-smoke {
+  position: absolute;
+  z-index: 2;
+  color: light-dark(#263c43, #d1dbde);
+  top: -8px;
+  left: 50%;
+  width: 132px;
+  height: 100px;
+  transform: translateX(-50%);
+  overflow: visible;
+  pointer-events: none;
+}
+
+.mascot-steam-heart {
+  transform-box: view-box;
+  transform-origin: 60px 88px;
+  opacity: 0;
+}
+
+.footer-mascot.is-smoking .mascot-steam-heart {
+  animation: mascot-heart-cloud 4s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+@keyframes mascot-heart-cloud {
+  0% {
+    opacity: 0;
+    transform: scale(0.12);
+  }
+
+  14% {
+    opacity: 0.08;
+    transform: scale(0.22);
+  }
+
+  45% {
+    opacity: 0.62;
+    transform: scale(0.85, 0.9);
+  }
+
+  57% {
+    opacity: 0.86;
+    transform: scale(1);
+  }
+
+  70% {
+    opacity: 0.82;
+    transform: scale(1);
+  }
+
+  82% {
+    opacity: 0.6;
+    transform: scale(1.08, 0.98) rotate(2deg);
+  }
+
+  92% {
+    opacity: 0.34;
+    transform: scale(1.19, 1.08) rotate(-4deg);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.32, 1.18) rotate(8deg);
+  }
 }
 
 .updated {
@@ -137,11 +227,6 @@ button:focus-visible {
     "nav theme";
   align-items: center;
   gap: 12px 20px;
-}
-
-.footer-logo {
-  grid-area: logo;
-  justify-self: center;
 }
 
 .footer-nav {
@@ -196,5 +281,23 @@ button:focus-visible {
   *::after {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .footer-mascot.is-smoking .mascot-steam-heart {
+    animation-name: mascot-steam-reduced-heart;
+    animation-duration: 1.2s;
+    animation-timing-function: linear;
+  }
+}
+
+@keyframes mascot-steam-reduced-heart {
+  0%,
+  100% {
+    opacity: 0;
+  }
+
+  20%,
+  80% {
+    opacity: 0.7;
   }
 }

@@ -63,7 +63,72 @@ const ogImageAlt = "Tandoor — Raw ideas in. Something magnificent out. A terra
       <slot />
 
       <footer class="site-footer">
-        <img class="footer-logo" src={logo.src} width={logo.width} height={logo.height} alt="">
+        <button class="footer-mascot" type="button" aria-label="Make Tandoor release a heart of steam">
+          <img class="footer-logo" src={logo.src} width={logo.width} height={logo.height} alt="">
+          <svg class="mascot-smoke" viewBox="0 0 120 100" aria-hidden="true">
+            <defs>
+              <filter id="mascot-smoke-filter" filterUnits="userSpaceOnUse" x="-40" y="-30" width="200" height="170" color-interpolation-filters="sRGB">
+                <feTurbulence
+                  type="fractalNoise"
+                  baseFrequency="0.025 0.045"
+                  numOctaves="2"
+                  seed="8"
+                  result="smoke-noise"
+                >
+                  <animate
+                    class="mascot-smoke-motion"
+                    attributeName="baseFrequency"
+                    values="0.025 0.045;0.04 0.065;0.028 0.05;0.06 0.08"
+                    keyTimes="0;0.48;0.78;1"
+                    dur="4s"
+                    begin="indefinite"
+                    restart="always"
+                    fill="freeze"
+                  />
+                </feTurbulence>
+                <feDisplacementMap
+                  in="SourceGraphic"
+                  in2="smoke-noise"
+                  scale="2"
+                  xChannelSelector="R"
+                  yChannelSelector="G"
+                  result="warped-smoke"
+                >
+                  <animate
+                    class="mascot-smoke-motion"
+                    attributeName="scale"
+                    values="2;4;8;24;34"
+                    keyTimes="0;0.5;0.68;0.84;1"
+                    dur="4s"
+                    begin="indefinite"
+                    restart="always"
+                    fill="freeze"
+                  />
+                </feDisplacementMap>
+                <feComposite in="smoke-noise" in2="warped-smoke" operator="in" result="cloud-texture" />
+                <feColorMatrix
+                  in="cloud-texture"
+                  type="matrix"
+                  values="0 0 0 0 0
+                          0 0 0 0 0
+                          0 0 0 0 0
+                          0.55 0.45 0 0 0"
+                  result="smoke-opacity"
+                />
+                <feFlood flood-color="currentColor" result="smoke-color" />
+                <feComposite in="smoke-color" in2="smoke-opacity" operator="in" result="colored-cloud" />
+                <feGaussianBlur in="colored-cloud" stdDeviation="1.6" />
+              </filter>
+            </defs>
+
+            <path
+              class="mascot-steam-heart"
+              d="M60 88 C52 80 17 59 17 36 C17 13 45 8 60 31 C75 8 103 13 103 36 C103 59 68 80 60 88 Z"
+              fill="white"
+              filter="url(#mascot-smoke-filter)"
+            />
+          </svg>
+        </button>
         <nav class="footer-nav" aria-label="Legal and contact">
           <a href="/" aria-current={currentPage === "home" ? "page" : undefined}>Home</a>
           <a href="/privacy/" aria-current={currentPage === "privacy" ? "page" : undefined}>Privacy</a>
@@ -78,6 +143,7 @@ const ogImageAlt = "Tandoor — Raw ideas in. Something magnificent out. A terra
           </div>
         </div>
         <span class="visually-hidden" aria-live="polite" id="theme-status"></span>
+        <span class="visually-hidden" aria-live="polite" id="mascot-status"></span>
       </footer>
     </div>
 
@@ -105,6 +171,26 @@ const ogImageAlt = "Tandoor — Raw ideas in. Something magnificent out. A terra
       applyTheme(savedTheme);
       themeChoices.forEach((choice) => {
         choice.addEventListener("click", () => applyTheme(choice.dataset.themeChoice, true));
+      });
+    </script>
+    <script is:inline>
+      const mascot = document.querySelector(".footer-mascot");
+      const mascotStatus = document.getElementById("mascot-status");
+      const smokeMotions = mascot?.querySelectorAll(".mascot-smoke-motion") ?? [];
+      let smokeReset;
+
+      mascot?.addEventListener("click", () => {
+        mascot.classList.remove("is-smoking");
+        void mascot.offsetWidth;
+        mascot.classList.add("is-smoking");
+        if (mascotStatus) mascotStatus.textContent = "A heart of steam emerges from Tandoor, distorts, then fades.";
+        if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          smokeMotions.forEach((motion) => {
+            if (typeof motion.beginElement === "function") motion.beginElement();
+          });
+        }
+        window.clearTimeout(smokeReset);
+        smokeReset = window.setTimeout(() => mascot.classList.remove("is-smoking"), 4400);
       });
     </script>
   </body>
