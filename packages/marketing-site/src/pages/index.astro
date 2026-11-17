@@ -1,0 +1,124 @@
+---
+import { brand } from "@tandoor/brand";
+import SiteLayout from "../layouts/SiteLayout.astro";
+---
+
+<SiteLayout
+  title={brand.name}
+  description={brand.description}
+>
+  <main id="main-content" tabindex="-1" class="prose-page brand-prose">
+    <h1>{brand.name}</h1>
+
+    <p>Tandoor is a general purpose agent I am building on top of <a href="https://github.com/earendil-works/pi/tree/main/packages/durable" target="_blank" rel="noopener noreferrer">Pi Durable</a>.</p>
+
+    <p>That sentence may arise these questions in your mind:</p>
+
+    <p><strong>Q1.</strong> Why am I building my own instead of using Grok Bot, Dots, and the million other things out there?</p>
+    <p>Ans: Because I am building it for my girlfriend. There is love in it. And because I can.</p>
+
+    <p><strong>Q2.</strong> Why Pi Durable?</p>
+    <p>Ans: Because it's cool. But also because it gives me durability, multi-player capabitlies, and it is OSS.</p>
+
+    <p><strong>Q3.</strong> Why the name <em>Tandoor</em>?</p>
+    <p>
+      Ans: Tandoor is used to produce some of my favorite dishes: Chicken
+      Tikka Masala, Tandoori Chicken, Naan, Roti, Kulcha, Laccha
+      Paratha...and my mouth is already watering! But also because it
+      signifies something <em>raw</em> going in and something{" "}
+      <em>magnificent</em> coming out.
+    </p>
+
+    <h2>Use Cases</h2>
+
+    <p>
+      The whole internet claims these agents to be solving their million dollar
+      problems. That's not true with <em>most</em> humans. Matter of fact most
+      humans don't even know wtf "AI agent team mates" are and can do.
+    </p>
+
+    <p>Even then, I find them mildly useful.</p>
+
+    <p>
+      Instead of listing generic use cases, I will just write about some use
+      cases I have found that work for me.
+    </p>
+
+    <h3>Doing My College Assignments</h3>
+
+    <p>
+      I'm against cheating, but the college assignments I get don't add
+      anything of value to my life, and hence it is meaningless for me to
+      spend time on that.
+    </p>
+
+    <p>My agent just uses the browser and does it for me.</p>
+
+    <h3>Managing My Finances</h3>
+
+    <p>
+      Instead of using an app like Fold (<a href="https://fold.money/" target="_blank" rel="noopener noreferrer">fold.money</a>),
+      I just message my agent after doing a transaction. The agent has access
+      to emails too so it can read monthly bank statements too and ask me
+      questions about unidentified transactions.
+    </p>
+
+    <p>Why this workflow is better:</p>
+
+    <ol>
+      <li>I can record all types of transactions (cash, card, savings account).</li>
+      <li>
+        Most transactions that I do are shared with other people. I pay on
+        there behalf. So I can say "divide a transaction with X" and it
+        maintains a ledger too.
+      </li>
+      <li>I keep my ledger in my own Metakip workspace instead of giving a finance app my transaction history. The agent and its configured AI provider still process the information I send.</li>
+    </ol>
+
+    <h3>Job Search</h3>
+
+    <p>
+      I have set up a schedule that runs hourly and sends me job posts.
+      <strong>It doesn't apply for me,</strong> because I don't think that is right.
+    </p>
+
+    <h3>Daily Briefs</h3>
+
+    <p>
+      Setup a daily brief for 10 AM every day that checks my email and calendar
+      and news and prepares me for the day.
+    </p>
+
+    <p>Also set up an hourly email check.</p>
+
+    <h3>Genearl Purpose Search</h3>
+
+    <p>Asking random stuff like:</p>
+
+    <ol>
+      <li>Nearest metro exit from Rajiv Chowk for Sarvana Bhawan</li>
+      <li>How does text render onto a browser?</li>
+      <li>Telegram just released a new widgets feature. Check it out and lmk how we can use it.</li>
+    </ol>
+
+    <p>And also doing general purpose stuff like:</p>
+
+    <ol>
+      <li>My friend's phone got stolen in the Delhi Metro. Asked the agent to fill the lost and found. (phone still not found btw)</li>
+      <li>Editing my resume in google docs</li>
+      <li>Asking BookMyShow about ticket refunds via email</li>
+    </ol>
+
+    <p>and a lot more that I prolly don't remember</p>
+
+    <h2>A Note on Metakip</h2>
+
+    <p>
+      I use Metakip (<a href="https://metakip.com/" target="_blank" rel="noopener noreferrer">metakip.com</a>) as my
+      knowledge base. I ask my agent to store all the financial transactions,
+      assignments, job trackers, etc. in Metakip.
+    </p>
+
+    <p>I created Metakip for my use case, but you can use it too.</p>
+  </main>
+</SiteLayout>

@@ -1,0 +1,28 @@
+{
+  "name": "tandoor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.18.0",
+  "engines": {
+    "node": ">=22.23.4"
+  },
+  "scripts": {
+    "build": "pnpm --filter @tandoor/marketing-site build",
+    "check": "pnpm run typecheck && pnpm test",
+    "brand:icons": "pnpm --filter @tandoor/brand icons",
+    "site:dev": "pnpm --filter @tandoor/marketing-site dev",
+    "site:check": "pnpm --filter @tandoor/marketing-site check",
+    "site:build": "pnpm --filter @tandoor/marketing-site build",
+    "site:preview": "pnpm --filter @tandoor/marketing-site preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json && pnpm run site:check",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/proper-lockfile": "4.1.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

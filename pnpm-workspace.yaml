@@ -1,0 +1,9 @@
+packages:
+  - .
+  - packages/brand
+  - packages/marketing-site
+
+allowBuilds:
+  '@google/genai': true
+  esbuild: true
+  protobufjs: true

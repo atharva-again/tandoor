@@ -1,0 +1,95 @@
+---
+import { brand } from "@tandoor/brand";
+import SiteLayout from "../../layouts/SiteLayout.astro";
+---
+
+<SiteLayout
+  title={`Privacy Policy | ${brand.name}`}
+  description="How Tandoor processes Telegram messages, connected Google account data, and workspace information."
+  currentPage="privacy"
+>
+  <main id="main-content" tabindex="-1" class="prose-page brand-prose">
+    <h1>Privacy Policy</h1>
+    <p class="updated">Last updated: November 14, 2026</p>
+
+    <p>
+      Tandoor is a private Telegram agent available to invited users. This
+      policy explains what information Tandoor processes when people chat
+      with the agent or connect a Google account.
+    </p>
+
+    <h2>Information Tandoor Processes</h2>
+    <ul>
+      <li>Telegram messages, attachments, account identifiers, and basic profile information needed to provide the service.</li>
+      <li>Prompts, agent responses, tool activity, and files saved in a Tandoor workspace.</li>
+      <li>When you connect Google, your account email and the Google data accessed or changed while carrying out your requests. This may include Gmail, Calendar, Drive, Docs, Sheets, Classroom, Contacts, and other services listed on Google's consent screen.</li>
+    </ul>
+
+    <h2>How Google Data Is Used</h2>
+    <p>
+      Tandoor uses Google data to carry out the actions you ask the agent to
+      perform, such as finding information, preparing summaries, or making
+      requested changes. When users configure recurring tasks, Tandoor may
+      access Google data at the scheduled time, for example to check email
+      or prepare a daily brief. This is task-specific access, not continuous
+      synchronization. Tandoor does not sell Google data, use it for
+      advertising, or use it to train general AI models.
+    </p>
+    <p>
+      Information needed to answer a request may be included in the agent's
+      conversation and sent to the AI model provider configured for that
+      worker. The provider processes that information to generate the
+      response under its own terms and privacy practices.
+    </p>
+
+    <h2>Storage and Retention</h2>
+    <p>
+      Tandoor stores conversation history, workspace files, and relevant
+      agent results on the server where Tandoor runs. Google account
+      credentials are stored in Gog's encrypted file keyring within the
+      corresponding worker's persistent storage. Data remains there until
+      it is removed by the service operator or the underlying storage is
+      deleted. Revoking Google access stops future access but does not
+      automatically remove information already present in conversation
+      history or files.
+    </p>
+
+    <h2>Personal and Group Spaces</h2>
+    <p>
+      Personal Google credentials are kept in the user's personal worker.
+      Group topics share the group's conversation and workspace. If you ask
+      Tandoor to use your personal Google account from a group, the result
+      may be included in that group's conversation and visible to its
+      members. A Google account connected as a shared group account is
+      available to the group worker.
+    </p>
+    <p>
+      The agent running in a worker can access that worker's files and
+      connected credentials to complete requests. Personal workers and
+      group workers have separate persistent storage, except that members
+      of a group intentionally share that group's worker and workspace.
+    </p>
+
+    <h2>Service Providers</h2>
+    <p>
+      Tandoor relies on Telegram to deliver messages, Google to provide
+      connected services, and the configured AI model provider to generate
+      responses. These providers process information as needed to provide
+      their services and under their own policies.
+    </p>
+
+    <h2>Your Choices</h2>
+    <p>
+      You can revoke Tandoor's Google access from your Google Account
+      security settings. To ask about removing data stored by Tandoor,
+      contact the operator at{" "}
+      <a href={`mailto:${brand.contactEmail}`}>{brand.contactEmail}</a>.
+    </p>
+
+    <h2>Contact</h2>
+    <p>
+      For privacy questions or data removal requests, email{" "}
+      <a href={`mailto:${brand.contactEmail}`}>{brand.contactEmail}</a>.
+    </p>
+  </main>
+</SiteLayout>

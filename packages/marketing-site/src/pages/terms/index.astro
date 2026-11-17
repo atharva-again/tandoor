@@ -1,0 +1,63 @@
+---
+import { brand } from "@tandoor/brand";
+import SiteLayout from "../../layouts/SiteLayout.astro";
+---
+
+<SiteLayout
+  title={`Terms of Service | ${brand.name}`}
+  description="Terms for using Tandoor, a private Telegram agent available by invitation."
+  currentPage="terms"
+>
+  <main id="main-content" tabindex="-1" class="prose-page brand-prose">
+    <h1>Terms of Service</h1>
+    <p class="updated">Last updated: November 14, 2026</p>
+
+    <p>
+      Tandoor is a private Telegram agent made available to invited users.
+      By using it, you agree to these terms.
+    </p>
+
+    <h2>Use of the Service</h2>
+    <p>
+      Use Tandoor only if you are authorized to access it. You are
+      responsible for your instructions, the accounts you connect, and
+      ensuring you have permission to access or change the information
+      involved in a request.
+    </p>
+
+    <h2>Connected Accounts and Agent Actions</h2>
+    <p>
+      When you connect Google or another service, Tandoor can use the
+      permissions you grant to carry out your requests. Depending on your
+      instructions, the agent may read, create, send, update, or delete
+      information. Review important actions and results. Agent responses
+      can be incomplete or incorrect.
+    </p>
+    <p>
+      You are responsible for reviewing messages and files you share in
+      Telegram. Group topics share conversation history and workspace
+      files. Information returned from a personal account during a group
+      request may appear in the shared group conversation.
+    </p>
+
+    <h2>Third Party Services</h2>
+    <p>
+      Tandoor depends on Telegram, Google, and AI model providers. Their
+      services are governed by their own terms and may change or become
+      unavailable.
+    </p>
+
+    <h2>Availability and Changes</h2>
+    <p>
+      Tandoor is an early personal project and is provided without a
+      promise of uninterrupted availability. The operator may change,
+      suspend, or discontinue access to the service.
+    </p>
+
+    <h2>Contact</h2>
+    <p>
+      Questions about these terms can be sent to{" "}
+      <a href={`mailto:${brand.contactEmail}`}>{brand.contactEmail}</a>.
+    </p>
+  </main>
+</SiteLayout>

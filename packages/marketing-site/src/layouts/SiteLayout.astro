@@ -1,0 +1,96 @@
+---
+import { brand } from "@tandoor/brand";
+import logo from "@tandoor/brand/assets/tandoor-logo.png";
+import favicon from "@tandoor/brand/assets/favicon.ico?url";
+import faviconPng from "@tandoor/brand/assets/favicon-32x32.png?url";
+import appleTouchIcon from "@tandoor/brand/assets/apple-touch-icon.png?url";
+import "../styles/global.css";
+
+interface Props {
+  title: string;
+  description: string;
+  currentPage?: "home" | "privacy" | "terms";
+}
+
+const { title, description, currentPage = "home" } = Astro.props;
+const canonicalUrl = new URL(Astro.url.pathname, brand.site);
+---
+
+<!doctype html>
+<html lang="en" data-theme="system">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content={description}>
+    <meta name="color-scheme" content="light dark">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content={title}>
+    <meta property="og:description" content={description}>
+    <link rel="canonical" href={canonicalUrl}>
+    <link rel="icon" href={favicon} sizes="16x16 32x32 48x48">
+    <link rel="icon" type="image/png" href={faviconPng} sizes="32x32">
+    <link rel="apple-touch-icon" href={appleTouchIcon} sizes="180x180">
+    <script is:inline>
+      try {
+        const theme = localStorage.getItem("tandoor-theme");
+        if (theme === "light" || theme === "dark" || theme === "system") {
+          document.documentElement.dataset.theme = theme;
+        }
+      } catch {
+        document.documentElement.dataset.theme = "system";
+      }
+    </script>
+    <title>{title}</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <div class="site-shell">
+      <slot />
+
+      <footer class="site-footer">
+        <img class="footer-logo" src={logo.src} width={logo.width} height={logo.height} alt="">
+        <nav class="footer-nav" aria-label="Legal and contact">
+          <a href="/" aria-current={currentPage === "home" ? "page" : undefined}>Home</a>
+          <a href="/privacy/" aria-current={currentPage === "privacy" ? "page" : undefined}>Privacy</a>
+          <a href="/terms/" aria-current={currentPage === "terms" ? "page" : undefined}>Terms</a>
+          <a href={`mailto:${brand.contactEmail}`}>Contact</a>
+        </nav>
+        <div class="theme-control">
+          <div class="theme-options" role="group" aria-label="Theme">
+            <button type="button" data-theme-choice="system" aria-pressed="true">System</button>
+            <button type="button" data-theme-choice="light" aria-pressed="false">Light</button>
+            <button type="button" data-theme-choice="dark" aria-pressed="false">Dark</button>
+          </div>
+        </div>
+        <span class="visually-hidden" aria-live="polite" id="theme-status"></span>
+      </footer>
+    </div>
+
+    <script is:inline>
+      const themeChoices = document.querySelectorAll("[data-theme-choice]");
+      const themeStatus = document.getElementById("theme-status");
+
+      function applyTheme(theme, save = false) {
+        if (!["system", "light", "dark"].includes(theme)) return;
+        document.documentElement.dataset.theme = theme;
+        themeChoices.forEach((choice) => {
+          choice.setAttribute("aria-pressed", String(choice.dataset.themeChoice === theme));
+        });
+        if (themeStatus) themeStatus.textContent = `${theme} theme selected`;
+        if (save) {
+          try {
+            localStorage.setItem("tandoor-theme", theme);
+          } catch {
+            // The selected theme still applies for this page view.
+          }
+        }
+      }
+
+      const savedTheme = document.documentElement.dataset.theme || "system";
+      applyTheme(savedTheme);
+      themeChoices.forEach((choice) => {
+        choice.addEventListener("click", () => applyTheme(choice.dataset.themeChoice, true));
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,88 @@
+@import "@fontsource-variable/inter";
+
+:root {
+  color-scheme: light dark;
+  --brand-font-sans: "Inter Variable", system-ui, sans-serif;
+  --page: light-dark(#ffffff, #050505);
+  --text: light-dark(#222222, #eeeeee);
+  --muted: light-dark(#666666, #aaaaaa);
+  --border: light-dark(#d7d7d7, #333333);
+  --subtle: light-dark(#f4f4f4, #141414);
+  --focus: light-dark(#555555, #dddddd);
+  font-family: var(--brand-font-sans);
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+.brand-prose h1 {
+  margin: 0 0 16px;
+  font-size: 2em;
+  font-weight: 640;
+  letter-spacing: -0.055em;
+  line-height: 1.25;
+}
+
+.brand-prose h2 {
+  margin: 27px 0 12px;
+  font-size: 1.45em;
+  font-weight: 620;
+  letter-spacing: -0.04em;
+  line-height: 1.3;
+}
+
+.brand-prose h3 {
+  margin: 23px 0 10px;
+  font-size: 1.15em;
+  font-weight: 620;
+  letter-spacing: -0.02em;
+}
+
+.brand-prose p {
+  margin: 0 0 16px;
+}
+
+.brand-prose ul,
+.brand-prose ol {
+  margin: 0 0 18px;
+  padding-left: 2em;
+}
+
+.brand-prose li + li {
+  margin-top: 4px;
+}
+
+.brand-prose blockquote {
+  margin: 0 0 16px;
+  padding: 0;
+  color: var(--muted);
+}
+
+.brand-prose code,
+.brand-prose pre {
+  font-family: var(--brand-font-sans);
+  font-size: 0.88em;
+}
+
+.brand-prose code {
+  padding: 0.15em 0.35em;
+  background: var(--subtle);
+}
+
+.brand-prose pre {
+  padding: 16px;
+  overflow-x: auto;
+  background: var(--subtle);
+}
+
+.brand-prose pre code {
+  padding: 0;
+  background: transparent;
+}
