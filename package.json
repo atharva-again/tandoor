@@ -11,6 +11,7 @@
     "build": "pnpm --filter @tandoor/marketing-site build",
     "check": "pnpm run typecheck && pnpm test",
     "brand:icons": "pnpm --filter @tandoor/brand icons",
+    "brand:og": "pnpm --filter @tandoor/brand og",
     "site:dev": "pnpm --filter @tandoor/marketing-site dev",
     "site:check": "pnpm --filter @tandoor/marketing-site check",
     "site:build": "pnpm --filter @tandoor/marketing-site build",

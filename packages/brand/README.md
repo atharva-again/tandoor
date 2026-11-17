@@ -12,6 +12,8 @@ do not copy its assets or redefine its brand styles in application folders.
 - `assets/tandoor-logo.png`: the original production mascot.
 - `assets/tandoor-testing-logo.png`: the testing mascot; do not use it as the
   production identity.
+- `assets/tandoor-og.png`: the 1200 × 630 social-sharing card, using the original
+  production mascot and Inter typography.
 - `assets/favicon.ico`: generated 16px, 32px, and 48px browser icons.
 - `assets/favicon-32x32.png`: generated PNG browser icon.
 - `assets/apple-touch-icon.png`: generated 180px Apple touch icon.
@@ -58,3 +60,11 @@ all three icon files in this package. If the source canvas changes, update
 the crop in `scripts/generate-icons.mjs`. Commit the generated icons together
 with the source change. Generation is explicit, so deployments do not need
 FFmpeg.
+
+## Updating the social-sharing card
+
+Run `pnpm brand:og` from the repository root after editing
+`scripts/generate-og.mjs`. The generator uses Sharp, the bundled Inter font,
+and the original production mascot; no browser or AI generation is needed.
+Commit the generated PNG with the source change. Applications should import
+it from `@tandoor/brand/assets/tandoor-og.png` rather than copying it.

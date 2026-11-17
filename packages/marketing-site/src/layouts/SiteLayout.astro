@@ -1,6 +1,7 @@
 ---
 import { brand } from "@tandoor/brand";
 import logo from "@tandoor/brand/assets/tandoor-logo.png";
+import ogImage from "@tandoor/brand/assets/tandoor-og.png";
 import favicon from "@tandoor/brand/assets/favicon.ico?url";
 import faviconPng from "@tandoor/brand/assets/favicon-32x32.png?url";
 import appleTouchIcon from "@tandoor/brand/assets/apple-touch-icon.png?url";
@@ -14,6 +15,8 @@ interface Props {
 
 const { title, description, currentPage = "home" } = Astro.props;
 const canonicalUrl = new URL(Astro.url.pathname, brand.site);
+const ogImageUrl = new URL(ogImage.src, brand.site);
+const ogImageAlt = "Tandoor — Raw ideas in. Something magnificent out. A terracotta mascot above a cream wordmark on a deep-teal curve.";
 ---
 
 <!doctype html>
@@ -24,8 +27,20 @@ const canonicalUrl = new URL(Astro.url.pathname, brand.site);
     <meta name="description" content={description}>
     <meta name="color-scheme" content="light dark">
     <meta property="og:type" content="website">
+    <meta property="og:site_name" content={brand.name}>
+    <meta property="og:url" content={canonicalUrl}>
     <meta property="og:title" content={title}>
     <meta property="og:description" content={description}>
+    <meta property="og:image" content={ogImageUrl}>
+    <meta property="og:image:type" content="image/png">
+    <meta property="og:image:width" content={String(ogImage.width)}>
+    <meta property="og:image:height" content={String(ogImage.height)}>
+    <meta property="og:image:alt" content={ogImageAlt}>
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content={title}>
+    <meta name="twitter:description" content={description}>
+    <meta name="twitter:image" content={ogImageUrl}>
+    <meta name="twitter:image:alt" content={ogImageAlt}>
     <link rel="canonical" href={canonicalUrl}>
     <link rel="icon" href={favicon} sizes="16x16 32x32 48x48">
     <link rel="icon" type="image/png" href={faviconPng} sizes="32x32">
