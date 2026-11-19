@@ -1,0 +1,278 @@
+syntax = "proto3";
+
+package tandoor.v1;
+
+service Worker {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc AdmitMessage(MessageAdmission) returns (MessageReceipt);
+  rpc InspectMessage(MessageReference) returns (MessageReceipt);
+  rpc WatchMessage(MessageReference) returns (stream AgentEvent);
+  rpc CancelMessage(MessageCancellation) returns (Acknowledgement);
+  rpc ControlConversation(ConversationControlRequest) returns (ConversationControlResponse);
+  rpc GetModelSettings(ModelSettingsRequest) returns (ModelSettingsResponse);
+  rpc StartOAuthLogin(OAuthLoginStartRequest) returns (stream OAuthLoginEvent);
+  rpc RespondOAuthLogin(OAuthLoginPromptResponseRequest) returns (Acknowledgement);
+  rpc CancelOAuthLogin(OAuthLoginSessionRequest) returns (Acknowledgement);
+  rpc StartGoogleLogin(GoogleLoginStartRequest) returns (GoogleLoginStartResponse);
+  rpc CompleteGoogleLogin(GoogleLoginCompleteRequest) returns (GoogleLoginCompleteResponse);
+  rpc CancelGoogleLogin(GoogleLoginSessionRequest) returns (GoogleLoginCancelResponse);
+  rpc WatchIntegrationRequests(IntegrationRequestSubscription) returns (stream IntegrationRequest);
+  rpc ResolveIntegrationRequest(IntegrationRequestResolution) returns (Acknowledgement);
+  rpc ExecuteIntegration(ExecuteIntegrationRequest) returns (ExecuteIntegrationResponse);
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool ready = 1;
+  string version = 2;
+}
+
+message AgentMessage {
+  string request_id = 1;
+  string conversation_key = 2;
+  string text = 3;
+  string sender_id = 4;
+  string sender_name = 5;
+  string chat_id = 6;
+  string thread_id = 7;
+  int64 timestamp_ms = 8;
+  repeated TelegramAttachment attachments = 9;
+  string channel = 10;
+}
+
+message TelegramAttachment {
+  string filename = 1;
+  string mime_type = 2;
+  bytes data = 3;
+}
+
+message MessageAdmission {
+  AgentMessage message = 1;
+  bool only_if_idle = 2;
+}
+
+message MessageReference {
+  string conversation_key = 1;
+  string request_id = 2;
+}
+
+message MessageCancellation {
+  string conversation_key = 1;
+  string request_id = 2;
+  bool queued_only = 3;
+}
+
+message MessageReceipt {
+  reserved 1;
+  enum Status {
+    unspecified = 0;
+    missing = 1;
+    busy = 2;
+    queued = 3;
+    running = 4;
+    completed = 5;
+    unanswered = 6;
+  }
+  Status status = 2;
+}
+
+message Acknowledgement {
+  bool accepted = 1;
+  string message = 2;
+}
+
+message ConversationControlRequest {
+  string conversation_key = 1;
+  string action = 2;
+  string instructions = 3;
+}
+
+message ConversationControlResponse {
+  bool accepted = 1;
+  string message = 2;
+}
+
+message ModelSettingsRequest {
+  string conversation_key = 1;
+}
+
+message ModelOption {
+  string provider = 1;
+  string model_id = 2;
+  string name = 3;
+  repeated string thinking_levels = 4;
+}
+
+message ModelSettingsResponse {
+  ModelOption current_model = 1;
+  repeated ModelOption available_models = 2;
+  repeated ModelOption scoped_models = 3;
+  repeated string authenticated_providers = 4;
+  string thinking_level = 5;
+}
+
+message OAuthLoginStartRequest {
+  string provider_id = 1;
+}
+
+message OAuthLoginSessionRequest {
+  string session_id = 1;
+}
+
+message OAuthLoginPromptResponseRequest {
+  string session_id = 1;
+  string input = 2;
+}
+
+message GoogleLoginStartRequest {
+  string email = 1;
+}
+
+message GoogleLoginStartResponse {
+  bool accepted = 1;
+  string error = 2;
+  string session_id = 3;
+  string email = 4;
+  string auth_url = 5;
+}
+
+message GoogleLoginCompleteRequest {
+  string session_id = 1;
+  string auth_url = 2;
+}
+
+message GoogleLoginCompleteResponse {
+  bool accepted = 1;
+  string error = 2;
+}
+
+message GoogleLoginCancelResponse {
+  reserved 1;
+  enum Status {
+    unspecified = 0;
+    cancelled = 1;
+    completing = 2;
+    completed = 3;
+    inactive = 4;
+  }
+  Status status = 2;
+}
+
+message GoogleLoginSessionRequest {
+  string session_id = 1;
+}
+
+message OAuthLoginOption {
+  string id = 1;
+  string label = 2;
+  string description = 3;
+}
+
+message OAuthLoginStarted {}
+
+message OAuthLoginAuthUrl {
+  string url = 1;
+  string instructions = 2;
+}
+
+message OAuthLoginDeviceCode {
+  string user_code = 1;
+  string verification_uri = 2;
+  uint32 interval_seconds = 3;
+  uint32 expires_in_seconds = 4;
+}
+
+message OAuthLoginInfo {
+  string message = 1;
+  repeated string links = 2;
+}
+
+message OAuthLoginProgress {
+  string message = 1;
+}
+
+message OAuthLoginPrompt {
+  string prompt_type = 1;
+  string message = 2;
+  string placeholder = 3;
+  repeated OAuthLoginOption options = 4;
+}
+
+message OAuthLoginCompleted {}
+
+message OAuthLoginFailed {
+  string message = 1;
+}
+
+message OAuthLoginEvent {
+  string session_id = 1;
+  oneof event {
+    OAuthLoginStarted started = 2;
+    OAuthLoginAuthUrl auth_url = 3;
+    OAuthLoginDeviceCode device_code = 4;
+    OAuthLoginInfo info = 5;
+    OAuthLoginProgress progress = 6;
+    OAuthLoginPrompt prompt = 7;
+    OAuthLoginCompleted completed = 8;
+    OAuthLoginFailed failed = 9;
+  }
+}
+
+message AgentEvent {
+  string request_id = 1;
+  oneof event {
+    Started started = 2;
+    TextUpdate text_update = 3;
+    Completed completed = 4;
+    Failed failed = 5;
+    TelegramAttachment attachment = 6;
+  }
+}
+
+message IntegrationRequestSubscription {}
+
+message IntegrationRequest {
+  string request_id = 1;
+  string conversation_key = 2;
+  string actor_id = 3;
+  string integration_id = 4;
+  string operation = 5;
+  string payload_json = 6;
+  string target_scope = 7;
+}
+
+message IntegrationRequestResolution {
+  string request_id = 1;
+  bool accepted = 2;
+  string error = 3;
+  string payload_json = 4;
+}
+
+message ExecuteIntegrationRequest {
+  string integration_id = 1;
+  string operation = 2;
+  string payload_json = 3;
+}
+
+message ExecuteIntegrationResponse {
+  bool accepted = 1;
+  string error = 2;
+  string payload_json = 3;
+}
+
+message Started {}
+
+message TextUpdate {
+  // Full text currently visible for this run, not just the newest token delta.
+  string text = 1;
+}
+
+message Completed {
+  string text = 1;
+}
+
+message Failed {
+  string message = 1;
+  string code = 2;
+}

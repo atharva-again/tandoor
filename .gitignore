@@ -1,9 +1,12 @@
 node_modules/
 dist/
+packages/protocol/generated/
 .astro/
 .env
 .env.*
 !.env.example
+client_secret_*.json
 coverage/
 .tandoor/
 *.log
+.pi/

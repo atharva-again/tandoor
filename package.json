@@ -9,21 +9,34 @@
   },
   "scripts": {
     "build": "pnpm --filter @tandoor/marketing-site build",
-    "check": "pnpm run typecheck && pnpm test",
+    "dev": "tsx packages/gateway/src/main.ts",
+    "check": "pnpm run typecheck",
     "brand:icons": "pnpm --filter @tandoor/brand icons",
     "brand:og": "pnpm --filter @tandoor/brand og",
     "site:dev": "pnpm --filter @tandoor/marketing-site dev",
     "site:check": "pnpm --filter @tandoor/marketing-site check",
     "site:build": "pnpm --filter @tandoor/marketing-site build",
     "site:preview": "pnpm --filter @tandoor/marketing-site preview",
-    "typecheck": "tsc --noEmit -p tsconfig.json && pnpm run site:check",
-    "test": "vitest run"
+    "protocol:generate": "proto-loader-gen-types --grpcLib=@grpc/grpc-js --longs=Number --enums=String --defaults --oneofs --importFileExtension=.js --outDir=packages/protocol/generated packages/protocol/proto/tandoor/v1/worker.proto",
+    "typecheck": "pnpm run protocol:generate && tsc --noEmit -p tsconfig.json && pnpm run site:check"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
     "@types/proper-lockfile": "4.1.4",
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2",
-    "vitest": "^5.1.0"
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.5.2",
+    "@earendil-works/pi-ai": "1.5.2",
+    "@earendil-works/pi-durable": "1.5.2",
+    "@earendil-works/pi-schema": "1.5.2",
+    "@grpc/grpc-js": "^1.14.7",
+    "@grpc/proto-loader": "^0.8.1",
+    "abort-controller": "3.0.0",
+    "context.dev": "3.30.0",
+    "croner": "^10.0.1",
+    "grammy": "^1.46.0",
+    "proper-lockfile": "^4.1.2"
   }
 }
