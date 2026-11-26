@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import type { TandoorConfig } from "../../shared/src/config.js";
 import {
   GOOGLE_OAUTH_CALLBACK_PATH,
@@ -9,11 +11,13 @@ import {
 const GOOGLE_OAUTH_OPEN_PATH = "/oauth/google/open";
 const GOOGLE_OAUTH_LOGO_PATH = "/assets/tandoor-logo.png";
 const GOOGLE_OAUTH_SAD_LOGO_PATH = "/assets/tandoor-logo-sad.png";
-const GOOGLE_OAUTH_LOGO_ASSET = new URL("../../brand/assets/tandoor-logo.png", import.meta.url);
-const GOOGLE_OAUTH_SAD_LOGO_ASSET = new URL(
-  "../../brand/assets/01a1f4db-dae8-72e2-8a49-54707f2fa6c3/ig_092fda96fc6e6f9b016b03016e48e487d08452045e1a07dfb4.png",
-  import.meta.url,
-);
+const SOURCE_GOOGLE_OAUTH_LOGO_ASSET = new URL("../../brand/assets/tandoor-logo.png", import.meta.url);
+const logoAssetCandidates = [
+  SOURCE_GOOGLE_OAUTH_LOGO_ASSET,
+  new URL("../../../../packages/brand/assets/tandoor-logo.png", import.meta.url),
+];
+const GOOGLE_OAUTH_LOGO_ASSET =
+  logoAssetCandidates.find((asset) => existsSync(fileURLToPath(asset))) ?? SOURCE_GOOGLE_OAUTH_LOGO_ASSET;
 
 export type GoogleLoginSessionState = {
   sessionId: string;
@@ -95,10 +99,7 @@ export class GoogleOAuthCallbackServer<T extends GoogleOAuthSession> {
       return;
     }
     if (url.pathname === GOOGLE_OAUTH_LOGO_PATH || url.pathname === GOOGLE_OAUTH_SAD_LOGO_PATH) {
-      await this.sendLogo(
-        response,
-        url.pathname === GOOGLE_OAUTH_SAD_LOGO_PATH ? GOOGLE_OAUTH_SAD_LOGO_ASSET : GOOGLE_OAUTH_LOGO_ASSET,
-      );
+      await this.sendLogo(response, GOOGLE_OAUTH_LOGO_ASSET);
       return;
     }
     if (url.pathname === GOOGLE_OAUTH_COMPLETE_PATH) {
