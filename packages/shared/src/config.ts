@@ -12,6 +12,7 @@ export interface TandoorConfig {
   allowedUserIds: ReadonlySet<string>;
   dataDir: string;
   workerImage: string;
+  workerContainerPrefix: string;
   podman: string;
   modelProvider: "openai" | "openai-codex" | "xai";
   modelId: string;
@@ -68,9 +69,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): TandoorConfig 
   const googleOAuthRedirectUri = env.TANDOOR_GOOGLE_OAUTH_REDIRECT_URI?.trim() ||
     DEFAULT_GOOGLE_OAUTH_REDIRECT_URI;
   const googleOAuthCallbackPort = Number(env.TANDOOR_GOOGLE_OAUTH_CALLBACK_PORT ?? "8787");
+  const workerContainerPrefix = env.TANDOOR_WORKER_CONTAINER_PREFIX?.trim() || "tandoor";
 
   if (!telegramBotToken) errors.push("TANDOOR_TELEGRAM_BOT_TOKEN is required.");
   if (allowedUserIds.size === 0) errors.push("Configure TANDOOR_ALLOWED_USER_IDS.");
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,40}$/.test(workerContainerPrefix)) {
+    errors.push("TANDOOR_WORKER_CONTAINER_PREFIX must be 1-41 letters, numbers, dots, underscores, or hyphens, starting with a letter or number.");
+  }
   if (modelProvider !== "openai" && modelProvider !== "openai-codex" && modelProvider !== "xai") {
     errors.push("TANDOOR_MODEL_PROVIDER must be openai, openai-codex, or xai.");
   }
@@ -117,6 +122,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): TandoorConfig 
     allowedUserIds,
     dataDir: resolve(env.TANDOOR_DATA_DIR ?? join(homedir(), ".local", "share", "tandoor")),
     workerImage: env.TANDOOR_WORKER_IMAGE?.trim() || "localhost/tandoor-worker:dev",
+    workerContainerPrefix,
     podman: env.TANDOOR_PODMAN?.trim() || "podman",
     modelProvider: modelProvider as "openai" | "openai-codex" | "xai",
     modelId:

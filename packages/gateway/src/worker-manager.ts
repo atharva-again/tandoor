@@ -110,6 +110,7 @@ export class PodmanWorkerManager {
           this.config.googleOAuthClientFile ?? "",
           webOAuthClientHash,
           this.config.googleOAuthRedirectUri,
+          this.config.workerContainerPrefix,
           record.credentialGeneration,
         ]),
       )
@@ -120,7 +121,7 @@ export class PodmanWorkerManager {
     const secretsPath = join(this.metadataDir, `${slug}.env`);
     await this.writeSecrets(secretsPath, record.authToken, record.gogKeyringPassword);
 
-    const containerName = `tandoor-${slug}`;
+    const containerName = `${this.config.workerContainerPrefix}-${slug}`;
     const exists = await this.containerExists(containerName);
     const running = exists && (await this.containerRunning(containerName));
     const containerIsCurrent = running &&
