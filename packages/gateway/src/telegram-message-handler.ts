@@ -3,7 +3,6 @@ import type { TelegramAttachment } from "../../shared/src/grpc.js";
 import { conversationKey, type TelegramMessageIdentity } from "../../shared/src/scope.js";
 import { mediaDescription, messageText, parseCommand, senderName, telegramAttachments, telegramIdentity } from "./telegram-base.js";
 import type { TelegramUI } from "./telegram-ui.js";
-import type { TelegramProviderAuth } from "./telegram-provider-auth.js";
 import type { TelegramGoogleAuth } from "./telegram-google-auth.js";
 import type { TelegramCommands } from "./telegram-commands.js";
 import type { TelegramInbox } from "./telegram-inbox.js";
@@ -19,14 +18,13 @@ export class TelegramMessageHandler {
   constructor(private readonly options: {
     ui: TelegramUI;
     token: string;
-    providers: TelegramProviderAuth;
     google: TelegramGoogleAuth;
     commands: TelegramCommands;
     inbox: TelegramInbox;
   }) {}
 
   async handleMessageUpdate(ctx: Context): Promise<void> {
-    const { ui, providers, google, inbox, commands } = this.options;
+    const { ui, google, inbox, commands } = this.options;
     const identity = telegramIdentity(ctx);
     if (!identity || !ctx.message || !ctx.from || !ui.isAllowed(identity)) return;
     const topic = createdTelegramTopic(ctx);
@@ -34,7 +32,7 @@ export class TelegramMessageHandler {
       if (topic.implicit) this.implicitTopics.add(`${identity.chatId}:${topic.threadId}`);
       return;
     }
-    if (await google.handleGoogleLoginReply(ctx, identity) || await providers.handleOAuthReply(ctx, identity)) return;
+    if (await google.handleGoogleLoginReply(ctx, identity)) return;
     const rawText = messageText(ctx);
     let attachments: TelegramAttachment[] = [];
     let notice = "";

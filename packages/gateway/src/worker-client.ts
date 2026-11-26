@@ -1,4 +1,4 @@
-import { decodeEvent, workerMetadata, type MessageReference, type ModelSettingsResponse, type WireAgentEvent, type WorkerClient } from "../../shared/src/grpc.js";
+import { decodeEvent, workerMetadata, type MessageReference, type WireAgentEvent, type WorkerClient } from "../../shared/src/grpc.js";
 import type { CallOptions, ClientUnaryCall, Metadata, requestCallback } from "@grpc/grpc-js";
 import { RESPONSE_LIMITS, storeAttachment, type AgentResponse } from "../../shared/src/agent-response.js";
 import type { WorkerScope } from "../../shared/src/scope.js";
@@ -33,12 +33,6 @@ export function unary<K extends UnaryMethod>(
     const cancel = () => pending.cancel();
     signal?.addEventListener("abort", cancel, { once: true });
   });
-}
-
-export async function getModelSettings(worker: WorkerClient, conversationKey: string): Promise<ModelSettingsResponse> {
-  const response = await unary(worker, "getModelSettings", { conversationKey });
-  if (!response.currentModel) throw new Error("The worker returned no current model.");
-  return { ...response, currentModel: response.currentModel };
 }
 
 /** One response decoder for interactive replies and scheduled work. Cancelling observation never cancels work. */

@@ -22,47 +22,38 @@ and worker.
   private chat with Tandoor.
 - The gateway talks to workers using gRPC over host loopback ports. Workers are
   not exposed to the LAN. Each worker has a separate authentication token.
-- Durable SQLite data, workspace files, and OAuth credentials live in
-  persistent, user-specific directories. Containers do not mount the host home
-  directory, and each worker can access only its own data.
+- Durable SQLite data and workspace files live in persistent, user-specific
+  directories. A separate shared OpenAI OAuth credential store is mounted into
+  each worker so all users use the subscription owner's account.
 - Google account credentials use a separate per-user gog home.
 - Only private messages from allowlisted users are handled.
-- `pi-ai` supplies model access and OAuth for both OpenAI and OpenAI Codex.
-  Tandoor supports OAuth only, not API keys.
+- `pi-ai` supplies OpenAI Codex OAuth. Tandoor uses no API key.
 
 ## Current implementation
 
 Tandoor currently routes Telegram text, photos, and documents through the
 gateway. Photos are included in the model input; uploaded files are persisted
 inside the user's workspace and their paths are given to the
-agent. The `codex_generate_image` tool uses the worker's OpenAI Codex OAuth
-login to generate or edit images with GPT Image 2.5. It can use images attached
-to the latest Telegram message or reference images in the workspace, saves
-results into `generated-images/`, and returns a `MEDIA:<path>` marker for
-Telegram delivery. This uses the Codex image-generation backend endpoint rather
-than a documented public image API, so OpenAI could change it without notice.
-To send other workspace files back to Telegram, the agent can also include
+agent. The `codex_generate_image` tool uses the shared OpenAI Codex subscription
+to generate or edit images in the user's workspace. To send workspace files back to Telegram, the agent can include
 `MEDIA:<path>` in its final reply. Tandoor removes the marker and uploads the
 file; only regular files inside that worker's workspace are allowed.
 `/new`, `/compact`, and `/abort` operate on the private conversation;
 `/session` shows conversation message counts, token usage, recorded cost,
 current context estimate, and runtime settings. `/help` and `/start` are also
-available. While the agent is working, its Telegram preview has a **Stop**
+available. Each `/start` creates a new `Start` topic and sends the greeting
+there. Conversation state and bot replies stay in the topic where the user
+messaged.
+The existing OpenAI Codex subscription credential is shared by all isolated
+workers; users are never asked to sign in. All conversations use the fixed
+`openai-codex/gpt-6-luna` model with high
+thinking. Provider, model, scoped-model, and thinking selection commands are
+not available. While the agent is working, its Telegram preview has a **Stop**
 button that aborts the current conversation run. Agent text streams into that
 editable preview, then renders its final response with Telegram rich Markdown.
-`/session` also uses rich Markdown formatting. `/model` opens a three step provider, model, and thinking
-level picker. Providers and models appear after signing in with `/login_provider`.
-`/model provider/model-id` remains available for direct selection and then
-opens the thinking level picker. `/thinking` opens the levels supported by the
-current model. `/login_provider` opens a button based OAuth login picker for OpenAI,
-OpenAI Codex, or xAI (Grok/X). `/logout_provider` removes a provider's saved OAuth
-credentials from that worker. It does not revoke the token with the provider.
-OpenAI and OpenAI Codex use a browser flow. If sign in redirects to a
-localhost page or an error, paste the full URL into the private bot chat.
-Tandoor deletes that reply after forwarding it. xAI uses a verification page
-and one time code.
-`/scoped_models` lets a conversation choose from and edit its own saved subset
-of models. Each user's private conversation has independent settings.
+`/session` also uses rich Markdown formatting. OpenAI sign-in uses a browser flow.
+If sign in redirects to an error page, paste the full URL into the private bot
+chat. Tandoor deletes that reply after forwarding it.
 
 The worker image includes the `gog` CLI, which the agent can run directly from
 its shell for Google Workspace tasks. Tandoor also invokes Gog through the
@@ -189,8 +180,6 @@ Optional:
 - `TANDOOR_DATA_DIR` (defaults to `~/.local/share/tandoor`)
 - `TANDOOR_WORKER_IMAGE` (defaults to `localhost/tandoor-worker:dev`)
 - `TANDOOR_PODMAN` (defaults to `podman`)
-- `TANDOOR_MODEL_PROVIDER` (`openai`, `openai-codex`, or `xai`; defaults to `openai-codex`)
-- `TANDOOR_MODEL_ID` (defaults to `gpt-6-luna` for OpenAI and OpenAI Codex, or `grok-4.3` for xAI; new OpenAI/OpenAI Codex conversations default to xhigh thinking)
 - `TANDOOR_GOOGLE_OAUTH_CLIENT_FILE` (optional existing/default Gog OAuth client path; keep it if existing accounts use the Desktop client)
 - `TANDOOR_GOOGLE_OAUTH_WEB_CLIENT_FILE` (Web application OAuth client JSON path; required for callback-based `/login_google`)
 - `TANDOOR_GOOGLE_OAUTH_REDIRECT_URI` (Google callback URI; defaults to the `auth.tandoor.atharvaverma.com` callback above)
@@ -199,8 +188,9 @@ Optional:
 
 Build the worker image with
 `podman build -t localhost/tandoor-worker:dev -f Containerfile .` and start
-the gateway with `pnpm run dev`. Then send `/login_provider` to Tandoor to connect an
-account. Each allowlisted user can choose their own provider account and model.
+the gateway with `pnpm run dev`. The existing OpenAI Codex OAuth credential is
+seeded into the shared credential store on first worker startup. `/start`
+creates a `Start` topic and greets the user there.
 
 Rebuild the worker image after changes to worker code or the gRPC protocol.
 The gateway rejects incompatible worker protocols with a rebuild instruction.

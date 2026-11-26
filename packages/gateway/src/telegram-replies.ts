@@ -27,10 +27,15 @@ export function createTelegramReplyTask(ui: TelegramUI, connectWorker: ConnectWo
           await runtime.commit(() => completed, context);
           return;
         }
-        const status = await withTelegramDeadline((signal) => ui.bot.api.sendMessage(identity.chatId, "Waiting for the response…", {
-          ...(identity.threadId === undefined ? {} : { message_thread_id: identity.threadId }),
-          reply_markup: stopMarkup(ui, connectWorker, input),
-        }, signal), runtime.signal).catch(() => undefined);
+        const status = await withTelegramDeadline((signal) => ui.bot.api.sendMessage(
+          identity.chatId,
+          "Click the button below to stop the response",
+          {
+            ...(identity.threadId === undefined ? {} : { message_thread_id: identity.threadId }),
+            reply_markup: stopMarkup(ui, connectWorker, input),
+          },
+          signal,
+        ), runtime.signal).catch(() => undefined);
         await runtime.commit(() => ({
           status: "running", checkpoint: {
             phase: "watch", ...(status ? { statusMessageId: status.message_id } : {}),
@@ -57,6 +62,7 @@ export function createTelegramReplyTask(ui: TelegramUI, connectWorker: ConnectWo
           const worker = await connectWorker(target.scope);
           // Rebind buttons after restart without delaying observation.
           presenter?.restoreButtons();
+          presenter?.update("**Thinking…**");
           response = await collectResponse(worker, reference, runtime.signal, (text) => presenter?.update(text));
         } catch (error) {
           runtime.signal.throwIfAborted();

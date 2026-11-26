@@ -6,6 +6,9 @@ export const DEFAULT_GOOGLE_OAUTH_REDIRECT_URI =
   "https://auth.atharvaverma.com/oauth/google/callback";
 export const GOOGLE_OAUTH_CALLBACK_PATH = "/oauth/google/callback";
 export const GOOGLE_OAUTH_COMPLETE_PATH = "/oauth/google/complete";
+export const FIXED_MODEL_PROVIDER = "openai-codex" as const;
+export const FIXED_MODEL_ID = "gpt-6-luna" as const;
+export const FIXED_THINKING_LEVEL = "high" as const;
 
 export interface TandoorConfig {
   telegramBotToken: string;
@@ -14,8 +17,8 @@ export interface TandoorConfig {
   workerImage: string;
   workerContainerPrefix: string;
   podman: string;
-  modelProvider: "openai" | "openai-codex" | "xai";
-  modelId: string;
+  modelProvider: typeof FIXED_MODEL_PROVIDER;
+  modelId: typeof FIXED_MODEL_ID;
   contextDevApiKey?: string;
   /** Existing default/desktop Gog client, retained for previously connected accounts. */
   googleOAuthClientFile?: string;
@@ -61,7 +64,6 @@ function csvSet(value: string | undefined): ReadonlySet<string> {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): TandoorConfig {
   const telegramBotToken = env.TANDOOR_TELEGRAM_BOT_TOKEN?.trim() ?? "";
   const allowedUserIds = csvSet(env.TANDOOR_ALLOWED_USER_IDS);
-  const modelProvider = env.TANDOOR_MODEL_PROVIDER?.trim() || "openai-codex";
   const errors: string[] = [];
   const contextDevApiKey = env.TANDOOR_CONTEXT_DEV_API_KEY?.trim();
   const googleOAuthClientFile = env.TANDOOR_GOOGLE_OAUTH_CLIENT_FILE?.trim();
@@ -75,9 +77,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): TandoorConfig 
   if (allowedUserIds.size === 0) errors.push("Configure TANDOOR_ALLOWED_USER_IDS.");
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,40}$/.test(workerContainerPrefix)) {
     errors.push("TANDOOR_WORKER_CONTAINER_PREFIX must be 1-41 letters, numbers, dots, underscores, or hyphens, starting with a letter or number.");
-  }
-  if (modelProvider !== "openai" && modelProvider !== "openai-codex" && modelProvider !== "xai") {
-    errors.push("TANDOOR_MODEL_PROVIDER must be openai, openai-codex, or xai.");
   }
   if (contextDevApiKey && /[\r\n\0]/.test(contextDevApiKey)) {
     errors.push("TANDOOR_CONTEXT_DEV_API_KEY must be a single-line API key.");
@@ -124,14 +123,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): TandoorConfig 
     workerImage: env.TANDOOR_WORKER_IMAGE?.trim() || "localhost/tandoor-worker:dev",
     workerContainerPrefix,
     podman: env.TANDOOR_PODMAN?.trim() || "podman",
-    modelProvider: modelProvider as "openai" | "openai-codex" | "xai",
-    modelId:
-      env.TANDOOR_MODEL_ID?.trim() ||
-      (modelProvider === "openai"
-        ? "gpt-6-luna"
-        : modelProvider === "xai"
-          ? "grok-4.3"
-          : "gpt-6-luna"),
+    modelProvider: FIXED_MODEL_PROVIDER,
+    modelId: FIXED_MODEL_ID,
     ...(contextDevApiKey ? { contextDevApiKey } : {}),
     ...(googleOAuthClientFile
       ? { googleOAuthClientFile: resolve(googleOAuthClientFile) }

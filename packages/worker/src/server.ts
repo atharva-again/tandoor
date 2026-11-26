@@ -1,9 +1,9 @@
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 import * as grpc from "@grpc/grpc-js";
 import { isConversationAction, WORKER_PROTOCOL_VERSION, workerServiceDefinition } from "../../shared/src/grpc.js";
-import type { AgentEvent, OAuthLoginEvent, WorkerHandlers } from "../../shared/src/grpc.js";
+import type { AgentEvent, WorkerHandlers } from "../../shared/src/grpc.js";
 import type { WorkerConfig } from "./config.js";
-import { DurableWorkerRuntime, type OAuthLoginUpdate } from "./runtime.js";
+import { DurableWorkerRuntime } from "./runtime.js";
 import { InvalidAgentMessage } from "./messages.js";
 
 function hasValidToken(metadata: grpc.Metadata, expected: string): boolean {
@@ -39,46 +39,6 @@ function safeErrorDetail(error: unknown): string {
     )
     .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|xai-[A-Za-z0-9_-]{8,})\b/g, "[redacted]")
     .slice(0, 600);
-}
-
-function serializeOAuthLoginUpdate(sessionId: string, update: OAuthLoginUpdate): OAuthLoginEvent {
-  switch (update.type) {
-    case "started":
-      return { sessionId, started: {} };
-    case "auth_url":
-      return { sessionId, authUrl: { url: update.url, instructions: update.instructions ?? "" } };
-    case "device_code":
-      return {
-        sessionId,
-        deviceCode: {
-          userCode: update.userCode,
-          verificationUri: update.verificationUri,
-          intervalSeconds: update.intervalSeconds ?? 0,
-          expiresInSeconds: update.expiresInSeconds ?? 0,
-        },
-      };
-    case "info":
-      return { sessionId, info: { message: update.message, links: update.links?.map((link) => link.url) ?? [] } };
-    case "progress":
-      return { sessionId, progress: { message: update.message } };
-    case "text":
-    case "secret":
-    case "manual_code":
-    case "select":
-      return {
-        sessionId,
-        prompt: {
-          promptType: update.type,
-          message: update.message,
-          placeholder: "placeholder" in update ? update.placeholder ?? "" : "",
-          options: update.type === "select" ? [...update.options] : [],
-        },
-      };
-    case "completed":
-      return { sessionId, completed: {} };
-    case "failed":
-      return { sessionId, failed: { message: update.message } };
-  }
 }
 
 export async function startWorkerServer(config: WorkerConfig): Promise<{
@@ -125,32 +85,6 @@ export async function startWorkerServer(config: WorkerConfig): Promise<{
           message: error instanceof Error ? error.message : "The conversation action failed.",
         });
       }
-    },
-    GetModelSettings: async (call, callback) => {
-      try {
-        callback(null, await runtime.getModelSettings(call.request.conversationKey));
-      } catch {
-        callback({ code: grpc.status.INTERNAL, message: "Could not read model settings." });
-      }
-    },
-    StartOAuthLogin: (call) => {
-      const sessionId = randomUUID();
-      void runtime
-        .startOAuthLogin(sessionId, call.request.providerId, (update) => {
-          if (!call.destroyed) call.write(serializeOAuthLoginUpdate(sessionId, update));
-        })
-        .finally(() => {
-          if (!call.destroyed) call.end();
-        });
-      call.on("cancelled", () => runtime.cancelOAuthLogin(sessionId));
-    },
-    RespondOAuthLogin: (call, callback) => {
-      const accepted = runtime.respondOAuthLogin(call.request.sessionId, call.request.input);
-      callback(null, { accepted, message: accepted ? "Login input received." : "No login is waiting for input." });
-    },
-    CancelOAuthLogin: (call, callback) => {
-      const accepted = runtime.cancelOAuthLogin(call.request.sessionId);
-      callback(null, { accepted, message: accepted ? "Login cancelled." : "Login is no longer active." });
     },
     StartGoogleLogin: async (call, callback) => {
       try {

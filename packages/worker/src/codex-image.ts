@@ -177,13 +177,13 @@ function validateSize(value: string | undefined): string | undefined {
 function accountIdFromToken(token: string): string {
   const parts = token.split(".");
   if (parts.length !== 3 || !parts[1]) {
-    throw new Error("The OpenAI Codex OAuth token is invalid. Run /login_provider and sign in to OpenAI Codex again.");
+    throw new Error("The shared OpenAI Codex OAuth token is invalid. The subscription owner must reconnect it.");
   }
   let payload: Record<string, unknown>;
   try {
     payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as Record<string, unknown>;
   } catch {
-    throw new Error("The OpenAI Codex OAuth token is invalid. Run /login_provider and sign in to OpenAI Codex again.");
+    throw new Error("The shared OpenAI Codex OAuth token is invalid. The subscription owner must reconnect it.");
   }
   const auth = payload[JWT_CLAIM_PATH];
   const accountId =
@@ -191,7 +191,7 @@ function accountIdFromToken(token: string): string {
       ? auth.chatgpt_account_id
       : undefined;
   if (typeof accountId !== "string" || !accountId) {
-    throw new Error("The OpenAI Codex OAuth token is missing its account information. Run /login_provider again.");
+    throw new Error("The shared OpenAI Codex OAuth token is missing account information. The subscription owner must reconnect it.");
   }
   return accountId;
 }
@@ -470,7 +470,7 @@ async function requestImage(
       if (!response.ok) {
         const remote = sanitizeRemoteMessage(await response.text().catch(() => ""));
         const explanation = response.status === 401
-    ? "Codex rejected the OAuth session. Run /login_provider and sign in to OpenAI Codex again."
+          ? "Codex rejected the shared OAuth session. The subscription owner must reconnect it."
           : remote || response.statusText || "The Codex service returned an error.";
         throw new CodexHttpError(
           response.status,
@@ -528,7 +528,7 @@ export function createCodexImageTool(options: CodexImageToolOptions) {
       );
       const token = auth?.auth.apiKey;
       if (!token) {
-    throw new Error("OpenAI Codex is not signed in. Run /login_provider, choose OpenAI Codex, and try again.");
+        throw new Error("The shared OpenAI Codex subscription credential is unavailable.");
       }
       const accountId = accountIdFromToken(token);
       const workspace = await realpath(options.workspace);

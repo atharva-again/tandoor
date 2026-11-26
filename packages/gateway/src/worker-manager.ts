@@ -1,9 +1,10 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { chmod, mkdir, readFile, readdir, writeFile, rename } from "node:fs/promises";
+import { homedir } from "node:os";
 import { promisify } from "node:util";
 import { basename, join } from "node:path";
-import type { TandoorConfig } from "../../shared/src/config.js";
+import { FIXED_THINKING_LEVEL, type TandoorConfig } from "../../shared/src/config.js";
 import { createWorkerClient, WORKER_PROTOCOL_VERSION, type HealthResponse, type WorkerClient } from "../../shared/src/grpc.js";
 import { scopeSlug, type WorkerScope } from "../../shared/src/scope.js";
 import { unary } from "./worker-client.js";
@@ -23,6 +24,7 @@ export class PodmanWorkerManager {
   private readonly preparedSecrets = new Map<string, Promise<void>>();
   private readonly metadataDir: string;
   private readonly scopesDir: string;
+  private sharedAuthSeed?: Promise<void>;
   private closed = false;
 
   constructor(private readonly config: TandoorConfig) {
@@ -106,6 +108,8 @@ export class PodmanWorkerManager {
           scope,
           this.config.modelProvider,
           this.config.modelId,
+          FIXED_THINKING_LEVEL,
+          "shared-openai-auth-v1",
           Boolean(this.config.contextDevApiKey),
           this.config.googleOAuthClientFile ?? "",
           webOAuthClientHash,
@@ -117,9 +121,16 @@ export class PodmanWorkerManager {
       .digest("hex");
 
     const scopeDir = join(this.scopesDir, slug);
+    const sharedAuthDir = join(homedir(), ".local", "share", "tandoor", "shared-openai-auth");
+    await mkdir(sharedAuthDir, { recursive: true, mode: 0o700 });
+    await this.ensureSharedCodexCredential(sharedAuthDir);
     await mkdir(join(scopeDir, "workspace"), { recursive: true, mode: 0o700 });
     const secretsPath = join(this.metadataDir, `${slug}.env`);
-    await this.writeSecrets(secretsPath, record.authToken, record.gogKeyringPassword);
+    await this.writeSecrets(
+      secretsPath,
+      record.authToken,
+      record.gogKeyringPassword,
+    );
 
     const containerName = `${this.config.workerContainerPrefix}-${slug}`;
     const exists = await this.containerExists(containerName);
@@ -148,6 +159,8 @@ export class PodmanWorkerManager {
         "127.0.0.1::50051/tcp",
         "--volume",
         `${scopeDir}:/tandoor:Z`,
+        "--volume",
+        `${sharedAuthDir}:/tandoor/shared-auth:z`,
         ...(this.config.googleOAuthClientFile
           ? [
               "--volume",
@@ -202,10 +215,6 @@ export class PodmanWorkerManager {
         `TANDOOR_GOOGLE_OAUTH_REDIRECT_URI=${this.config.googleOAuthRedirectUri}`,
         "--env",
         "TANDOOR_WORKER_PORT=50051",
-        "--env",
-        `TANDOOR_MODEL_PROVIDER=${this.config.modelProvider}`,
-        "--env",
-        `TANDOOR_MODEL_ID=${this.config.modelId}`,
         this.config.workerImage,
       ];
       await this.podman(runArgs);
@@ -217,7 +226,11 @@ export class PodmanWorkerManager {
     return client;
   }
 
-  private async writeSecrets(path: string, authToken: string, gogKeyringPassword: string): Promise<void> {
+  private async writeSecrets(
+    path: string,
+    authToken: string,
+    gogKeyringPassword: string,
+  ): Promise<void> {
     const values = [
       `TANDOOR_WORKER_AUTH_TOKEN=${authToken}`,
       `TANDOOR_GOG_KEYRING_PASSWORD=${gogKeyringPassword}`,
@@ -226,6 +239,74 @@ export class PodmanWorkerManager {
     await writeFile(temporary, `${values.join("\n")}\n`, { mode: 0o600 });
     await chmod(temporary, 0o600);
     await rename(temporary, path);
+  }
+
+  private async ensureSharedCodexCredential(sharedAuthDir: string): Promise<void> {
+    if (!this.sharedAuthSeed) {
+      this.sharedAuthSeed = this.seedSharedCodexCredential(sharedAuthDir);
+    }
+    await this.sharedAuthSeed;
+  }
+
+  private async seedSharedCodexCredential(sharedAuthDir: string): Promise<void> {
+    const target = join(sharedAuthDir, "credentials.json");
+    try {
+      await readFile(target, "utf8");
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+
+    const defaultScopesDir = join(homedir(), ".local", "share", "tandoor", "scopes");
+    const sourceDirs = [...new Set([this.scopesDir, defaultScopesDir])];
+    const matches: unknown[] = [];
+    for (const scopesDir of sourceDirs) {
+      let entries: string[];
+      try {
+        entries = await readdir(scopesDir);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+      for (const entry of entries) {
+        const path = join(scopesDir, entry, "auth", "credentials.json");
+        try {
+          const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
+          if (typeof parsed !== "object" || parsed === null || !("credentials" in parsed)) continue;
+          const credentials = parsed.credentials;
+          if (typeof credentials !== "object" || credentials === null || Array.isArray(credentials)) continue;
+          const credential = (credentials as Record<string, unknown>)["openai-codex"];
+          if (
+            typeof credential === "object" &&
+            credential !== null &&
+            "type" in credential &&
+            credential.type === "oauth" &&
+            "access" in credential &&
+            typeof credential.access === "string" &&
+            "refresh" in credential &&
+            typeof credential.refresh === "string" &&
+            "expires" in credential &&
+            typeof credential.expires === "number"
+          ) {
+            matches.push(credential);
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+    }
+
+    if (matches.length === 0) {
+      throw new Error("No existing OpenAI Codex subscription credential was found on this VPS.");
+    }
+    if (matches.length > 1) {
+      throw new Error("Multiple OpenAI Codex credentials were found; cannot safely choose the shared subscription.");
+    }
+
+    const temporary = `${target}.${process.pid}.tmp`;
+    await writeFile(temporary, `${JSON.stringify({ version: 1, credentials: { "openai-codex": matches[0] } }, null, 2)}\n`, { mode: 0o600 });
+    await chmod(temporary, 0o600);
+    await rename(temporary, target);
   }
 
   private async ensurePodmanSecret(name: string, sourceFile: string): Promise<void> {

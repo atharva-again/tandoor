@@ -72,7 +72,7 @@ function targetForRequest(
     !Number.isSafeInteger(identity.senderId) ||
     (identity.threadId !== undefined && !Number.isSafeInteger(identity.threadId)) ||
     identity.chatId !== identity.senderId ||
-    conversationKey(identity) !== request.conversationKey ||
+    !isCurrentOrLegacyTopicConversationKey(conversationKey(identity), request.conversationKey) ||
     String(identity.chatId) !== sourceScope.id
   ) {
     throw new Error("The scheduling request does not match its Telegram conversation.");
@@ -82,10 +82,18 @@ function targetForRequest(
     scope: sourceScope,
     actorId,
     senderName,
-    conversationKey: request.conversationKey,
+    conversationKey: conversationKey(identity),
     channel,
     destination: { chatId, threadId, chatType: "private" },
   };
+}
+
+function isCurrentOrLegacyTopicConversationKey(current: string, candidate: string): boolean {
+  if (candidate === current) return true;
+  if (current.endsWith(":thread:root") &&
+    candidate === current.slice(0, -":thread:root".length)) return true;
+  return candidate.startsWith(`${current}:thread:`) &&
+    /^\d+$/.test(candidate.slice(`${current}:thread:`.length));
 }
 
 function formatScheduleRows(schedules: readonly ScheduleSummary[]): string {

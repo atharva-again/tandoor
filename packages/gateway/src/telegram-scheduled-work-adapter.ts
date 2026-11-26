@@ -1,12 +1,15 @@
 import { isAdmitted, type MessageReference } from "../../shared/src/grpc.js";
-import type { TelegramMessageIdentity } from "../../shared/src/scope.js";
+import { conversationKey, type TelegramMessageIdentity } from "../../shared/src/scope.js";
 import type { ScheduledWorkInput, ScheduledWorkTarget } from "../../shared/src/schedule-model.js";
 import { unary, collectResponse, type ConnectWorker } from "./worker-client.js";
 import type { ScheduledExecution, ScheduledWorkAdapter } from "./scheduled-work-task.js";
 import { telegramIdentityForTarget } from "./telegram-destination.js";
 
 function scheduledMessageReference(input: ScheduledWorkInput, occurrenceId: string): MessageReference {
-  return { conversationKey: input.target.conversationKey, requestId: `tandoor-scheduled:${occurrenceId}` };
+  return {
+    conversationKey: conversationKey(telegramIdentityForTarget(input.target)),
+    requestId: `tandoor-scheduled:${occurrenceId}`,
+  };
 }
 
 export class TelegramScheduledWorkAdapter implements ScheduledWorkAdapter {

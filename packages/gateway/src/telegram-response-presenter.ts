@@ -3,7 +3,7 @@ import type { ResponsePresentation } from "./response-delivery.js";
 import { previewText, splitTelegramText } from "./telegram-message-formatting.js";
 import type { InlineKeyboardMarkup } from "./telegram-base.js";
 import type { TelegramUI } from "./telegram-ui.js";
-import { withTelegramDeadline } from "./telegram-send-policy.js";
+import { formatRejected, telegramBadRequest, withTelegramDeadline } from "./telegram-send-policy.js";
 
 /** Ephemeral progress only. Final output and cleanup belong to the durable delivery task. */
 export class TelegramResponsePresenter {
@@ -46,15 +46,22 @@ export class TelegramResponsePresenter {
     if (this.mode !== "preview") {
       try {
         await withTelegramDeadline((signal) => this.ui.bot.api.sendRichMessageDraft(chatId, this.draftId, {
-          blocks: [{ type: "paragraph", text: this.latest }],
+          markdown: this.latest,
         }, threadId === undefined ? {} : { message_thread_id: threadId }, signal), this.signal);
-        this.mode = "draft";
-        if (!this.heartbeat) {
-          this.heartbeat = setInterval(() => this.update(this.latest), 20_000);
-          this.heartbeat.unref?.();
-        }
+        this.startDraftHeartbeat();
         return;
-      } catch {
+      } catch (error) {
+        if (telegramBadRequest(error, formatRejected)) {
+          try {
+            await withTelegramDeadline((signal) => this.ui.bot.api.sendRichMessageDraft(chatId, this.draftId, {
+              blocks: [{ type: "paragraph", text: this.latest }],
+            }, threadId === undefined ? {} : { message_thread_id: threadId }, signal), this.signal);
+            this.startDraftHeartbeat();
+            return;
+          } catch {
+            // A Markdown prefix may be temporarily incomplete while it streams.
+          }
+        }
         // Switch presenter ownership once; no job-wide flags or cleanup assumptions.
         this.mode = "preview";
         if (this.heartbeat) clearInterval(this.heartbeat);
@@ -64,6 +71,14 @@ export class TelegramResponsePresenter {
       chatId, this.statusMessageId, this.latest, { reply_markup: this.markup }, signal,
     ), this.signal)
       .catch(() => undefined);
+  }
+
+  private startDraftHeartbeat(): void {
+    this.mode = "draft";
+    if (!this.heartbeat) {
+      this.heartbeat = setInterval(() => this.update(this.latest), 20_000);
+      this.heartbeat.unref?.();
+    }
   }
 
   async stop(): Promise<void> {

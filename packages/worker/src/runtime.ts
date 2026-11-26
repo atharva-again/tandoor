@@ -1,13 +1,10 @@
-import { mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rename } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { FileCredentialStore, tandoorCredentialFile } from "./auth/credential-store.js";
-import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
-import { createModels, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
-import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
+import { FileCredentialStore } from "./auth/credential-store.js";
+import { createModels } from "@earendil-works/pi-ai/models";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
-import { xaiProvider } from "@earendil-works/pi-ai/providers/xai";
 import {
   createRegistry,
   defineExtension,
@@ -22,8 +19,8 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 import type {
   ConversationAction,
   GoogleLoginCancelStatus,
-  ModelSettingsResponse,
 } from "../../shared/src/grpc.js";
+import { FIXED_THINKING_LEVEL } from "../../shared/src/config.js";
 import type { WorkerConfig } from "./config.js";
 import { controlConversation as runConversationControl } from "./conversation-control.js";
 import { createCodexImageTool } from "./codex-image.js";
@@ -38,8 +35,6 @@ import {
   startGoogleOAuthLogin,
   validateGoogleEmail,
 } from "./gog.js";
-import { ConversationModelSettingsStore } from "./model-settings.js";
-import { getAvailableOAuthModels } from "./model-catalog.js";
 import { createSchedulingExtension } from "./scheduling.js";
 import { createWebTools } from "./web.js";
 import { createResponseSnapshotExtension } from "./response-snapshot.js";
@@ -70,20 +65,6 @@ const ConversationIndexDoc = defineDocFamily<{ conversationId: number | null }, 
   checkpointWhen: () => false,
 });
 
-export type OAuthLoginUpdate =
-  | { type: "started" }
-  | AuthEvent
-  | AuthPrompt
-  | { type: "completed" }
-  | { type: "failed"; message: string };
-
-interface OAuthLoginSession {
-  providerId: string;
-  controller: AbortController;
-  answerPrompt: ((value: string) => void) | undefined;
-  rejectPrompt: ((error: Error) => void) | undefined;
-}
-
 interface GoogleLoginSession {
   email: string;
   expiresAt: number;
@@ -91,27 +72,10 @@ interface GoogleLoginSession {
   completion?: Promise<void>;
 }
 
-async function readOrCreateDeviceId(path: string): Promise<string> {
-  try {
-    return (await readFile(path, "utf8")).trim();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  const deviceId = randomUUID();
-  try {
-    await writeFile(path, `${deviceId}\n`, { flag: "wx", mode: 0o600 });
-    return deviceId;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    return (await readFile(path, "utf8")).trim();
-  }
-}
-
 export class DurableWorkerRuntime {
   readonly messages: WorkerMessages;
   private readonly conversations = new Map<string, Conversation>();
   private readonly opening = new Map<string, Promise<Conversation>>();
-  private readonly loginSessions = new Map<string, OAuthLoginSession>();
   private readonly googleLoginSessions = new Map<string, GoogleLoginSession>();
   private googleLoginStarting = false;
   private indexQueue: Promise<void> = Promise.resolve();
@@ -120,10 +84,7 @@ export class DurableWorkerRuntime {
     private readonly harness: Harness,
     private readonly config: WorkerConfig,
     private readonly models: ReturnType<typeof createModels>,
-    private readonly credentials: FileCredentialStore,
-    private readonly modelSettings: ConversationModelSettingsStore,
     private readonly workspace: string,
-    private readonly deviceId: string,
     readonly integrationBroker: IntegrationRequestBroker,
     private readonly integrations: IntegrationRegistry,
   ) {
@@ -134,19 +95,14 @@ export class DurableWorkerRuntime {
     const workspace = join(config.dataDir, "workspace");
     await mkdir(workspace, { recursive: true, mode: 0o700 });
     const workspaceRoot = await realpath(workspace);
-    const credentials = new FileCredentialStore(tandoorCredentialFile(config.dataDir));
+    const credentials = new FileCredentialStore(join(config.dataDir, "shared-auth", "credentials.json"));
     const models = createModels({ credentials });
-    const openai = openaiProvider();
-    models.setProvider({ ...openai, auth: { oauth: openai.auth.oauth! } });
-    models.setProvider(openaiCodexProvider());
-    const xai = xaiProvider();
-    models.setProvider({ ...xai, auth: { oauth: xai.auth.oauth! } });
+    const openaiCodex = openaiCodexProvider();
+    models.setProvider({ ...openaiCodex, auth: { oauth: openaiCodex.auth.oauth! } });
     const defaultModel = models.getModel(config.modelProvider, config.modelId);
     if (!defaultModel || defaultModel.type !== "chat") {
       throw new Error(`Unknown model "${config.modelId}" for provider "${config.modelProvider}".`);
     }
-    const deviceId = await readOrCreateDeviceId(join(config.dataDir, "openai-device-id"));
-
     const integrationBroker = new IntegrationRequestBroker();
     const integrations = new IntegrationRegistry();
     integrations.register(
@@ -170,11 +126,7 @@ export class DurableWorkerRuntime {
     registry.install(
       defineExtension({
         name: "tandoor-codex-image",
-        tools: [
-          createCodexImageTool({
-            workspace: workspaceRoot,
-          }),
-        ],
+        tools: [createCodexImageTool({ workspace: workspaceRoot })],
       }),
     );
     const storage = await openNodeSqliteStorage(join(config.dataDir, "conversations.sqlite"));
@@ -208,136 +160,10 @@ export class DurableWorkerRuntime {
       harness,
       config,
       models,
-      credentials,
-      new ConversationModelSettingsStore(join(config.dataDir, "model-settings.json")),
       workspaceRoot,
-      deviceId,
       integrationBroker,
       integrations,
     );
-  }
-
-  async getModelSettings(key: string): Promise<ModelSettingsResponse> {
-    const conversation = await this.getConversation(key);
-    const agent = await conversation.agent(BACKGROUND_CONTEXT);
-    const currentModel = agent.model
-      ? this.models.getModel(agent.model.provider, agent.model.modelId)
-      : undefined;
-    const { authenticatedProviders, models } = await getAvailableOAuthModels(this.models, this.credentials);
-    const toModelOption = (model: (typeof models)[number]) => ({
-      provider: model.provider,
-      modelId: model.id,
-      name: model.name,
-      thinkingLevels: getSupportedThinkingLevels(model),
-    });
-    const availableModels = models.map(toModelOption);
-    const availableByReference = new Map(
-      availableModels.map((model) => [`${model.provider}/${model.modelId}`, model]),
-    );
-    const scopedReferences = await this.modelSettings.getScopedModels(key);
-    const scopedModels = scopedReferences.flatMap((reference) => {
-      const model = availableByReference.get(`${reference.provider}/${reference.modelId}`);
-      return model ? [model] : [];
-    });
-    const resolvedCurrentModel = currentModel ?? this.models.getModel(this.config.modelProvider, this.config.modelId);
-    if (!resolvedCurrentModel) throw new Error("The conversation has no available current model.");
-    return {
-      currentModel: {
-        provider: resolvedCurrentModel.provider,
-        modelId: resolvedCurrentModel.id,
-        name: resolvedCurrentModel.name,
-        thinkingLevels: getSupportedThinkingLevels(resolvedCurrentModel),
-      },
-      availableModels,
-      scopedModels,
-      authenticatedProviders,
-      thinkingLevel: agent.thinkingLevel ?? "off",
-    };
-  }
-
-  async startOAuthLogin(
-    sessionId: string,
-    providerId: string,
-    emit: (update: OAuthLoginUpdate) => void,
-  ): Promise<void> {
-    if (providerId !== "openai" && providerId !== "openai-codex" && providerId !== "xai") {
-      emit({ type: "failed", message: "Unsupported OAuth provider." });
-      return;
-    }
-    if ([...this.loginSessions.values()].some((session) => session.providerId === providerId)) {
-      emit({ type: "failed", message: "A login for this provider is already in progress in this worker." });
-      return;
-    }
-
-    const session: OAuthLoginSession = {
-      providerId,
-      controller: new AbortController(),
-      answerPrompt: undefined,
-      rejectPrompt: undefined,
-    };
-    this.loginSessions.set(sessionId, session);
-    emit({ type: "started" });
-    try {
-      await this.models.login(
-        providerId,
-        "oauth",
-        {
-          signal: session.controller.signal,
-          notify: emit,
-          prompt: async (prompt) => {
-            if (providerId === "openai-codex" && prompt.type === "select") {
-              const browser = prompt.options.find((option) => option.id === "browser");
-              if (browser) return browser.id;
-            }
-            return new Promise<string>((resolve, reject) => {
-              const onAbort = () => {
-                session.answerPrompt = undefined;
-                session.rejectPrompt = undefined;
-                reject(new Error("Login cancelled."));
-              };
-              session.answerPrompt = (value) => {
-                session.controller.signal.removeEventListener("abort", onAbort);
-                session.answerPrompt = undefined;
-                session.rejectPrompt = undefined;
-                resolve(value);
-              };
-              session.rejectPrompt = (error) => {
-                session.controller.signal.removeEventListener("abort", onAbort);
-                session.answerPrompt = undefined;
-                session.rejectPrompt = undefined;
-                reject(error);
-              };
-              session.controller.signal.addEventListener("abort", onAbort, { once: true });
-              emit(prompt);
-            });
-          },
-        },
-        { agentName: "tandoor", getDeviceId: () => this.deviceId },
-      );
-      emit({ type: "completed" });
-    } catch {
-      emit({
-        type: "failed",
-        message: session.controller.signal.aborted ? "Login cancelled." : "Login failed. Run /login_provider to try again.",
-      });
-    } finally {
-      this.loginSessions.delete(sessionId);
-    }
-  }
-
-  respondOAuthLogin(sessionId: string, input: string): boolean {
-    const session = this.loginSessions.get(sessionId);
-    if (!session?.answerPrompt) return false;
-    session.answerPrompt(input);
-    return true;
-  }
-
-  cancelOAuthLogin(sessionId: string): boolean {
-    const session = this.loginSessions.get(sessionId);
-    if (!session) return false;
-    session.controller.abort();
-    session.rejectPrompt?.(new Error("Login cancelled."));
-    return true;
   }
 
   async startGoogleLogin(emailValue: string): Promise<{
@@ -459,14 +285,9 @@ export class DurableWorkerRuntime {
       {
         harness: this.harness,
         models: this.models,
-        credentials: this.credentials,
-        modelSettings: this.modelSettings,
         workspace: this.workspace,
-        isLoginInProgress: (providerId) =>
-          [...this.loginSessions.values()].some((session) => session.providerId === providerId),
       },
       conversation,
-      key,
       action,
       instructions,
     );
@@ -535,9 +356,24 @@ export class DurableWorkerRuntime {
             : [GOOGLE_WORKSPACE_AGENT_INSTRUCTIONS]),
         ];
         const instructions = [currentInstructions, ...missingInstructions].filter(Boolean).join("\n\n");
-        if (instructions !== agent.instructions) {
+        const modelNeedsUpdate =
+          agent.model?.provider !== this.config.modelProvider ||
+          agent.model?.modelId !== this.config.modelId;
+        if (
+          instructions !== agent.instructions ||
+          modelNeedsUpdate ||
+          agent.thinkingLevel !== FIXED_THINKING_LEVEL
+        ) {
           await existing.configure(
-            { instructions },
+            {
+              instructions,
+              ...(modelNeedsUpdate
+                ? { model: { provider: this.config.modelProvider, modelId: this.config.modelId } }
+                : {}),
+              ...(agent.thinkingLevel !== FIXED_THINKING_LEVEL
+                ? { thinkingLevel: FIXED_THINKING_LEVEL }
+                : {}),
+            },
             BACKGROUND_CONTEXT,
           );
         }
@@ -545,13 +381,6 @@ export class DurableWorkerRuntime {
       }
     }
 
-    const defaultModel = this.models.getModel(this.config.modelProvider, this.config.modelId);
-    const defaultThinkingLevel =
-      defaultModel &&
-        (this.config.modelProvider === "openai" || this.config.modelProvider === "openai-codex") &&
-        getSupportedThinkingLevels(defaultModel).includes("xhigh")
-        ? "xhigh"
-        : undefined;
     const conversation = await this.harness.createConversation(
       {
         ownership: { kind: "ownerless" },
@@ -560,7 +389,7 @@ export class DurableWorkerRuntime {
         },
         agent: {
           model: { provider: this.config.modelProvider, modelId: this.config.modelId },
-          ...(defaultThinkingLevel ? { thinkingLevel: defaultThinkingLevel } : {}),
+          thinkingLevel: FIXED_THINKING_LEVEL,
           cwd: this.workspace,
           instructions: [
             TELEGRAM_AGENT_INSTRUCTIONS,

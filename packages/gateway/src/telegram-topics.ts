@@ -1,6 +1,6 @@
-import type { Bot, Context } from "grammy";
+import type { Bot } from "grammy";
 
-export function createdTelegramTopic(ctx: Context): { threadId: number; implicit: boolean } | undefined {
+export function createdTelegramTopic(ctx: import("grammy").Context): { threadId: number; implicit: boolean } | undefined {
   const message = ctx.message;
   if (!message || !("forum_topic_created" in message)) return undefined;
   const created = message.forum_topic_created;
@@ -11,7 +11,7 @@ export function createdTelegramTopic(ctx: Context): { threadId: number; implicit
   };
 }
 
-/** Bot API's private-topic settings endpoint is newer than the installed Grammy declarations. */
+/** Enable the bot's private-chat topics for the topic-per-/start UX. */
 export async function enableTelegramTopics(bot: Bot): Promise<void> {
   const api = bot.api.raw as typeof bot.api.raw & {
     setMySettings(settings: {
@@ -21,6 +21,8 @@ export async function enableTelegramTopics(bot: Bot): Promise<void> {
     }): Promise<true>;
   };
   await api.setMySettings({
-    has_topics_enabled: true, allows_users_to_create_topics: true, has_topic_sidebar: true,
+    has_topics_enabled: true,
+    allows_users_to_create_topics: true,
+    has_topic_sidebar: true,
   });
 }

@@ -1,5 +1,5 @@
 import type { Context } from "grammy";
-import type { ModelOption, TelegramAttachment } from "../../shared/src/grpc.js";
+import type { TelegramAttachment } from "../../shared/src/grpc.js";
 import type { TelegramMessageIdentity } from "../../shared/src/scope.js";
 
 export type InlineKeyboardButton =
@@ -25,13 +25,6 @@ export function callbackIdentity(ctx: Context) {
   };
   return { identity, messageId: message.message_id };
 }
-
-export function modelReference(model: Pick<ModelOption, "provider" | "modelId">): string {
-  return `${model.provider}/${model.modelId}`;
-}
-
-const PROVIDER_NAMES: Readonly<Record<string, string>> = { openai: "OpenAI", "openai-codex": "OpenAI Codex", xai: "xAI (Grok/X)" };
-export function providerDisplayName(providerId: string): string { return PROVIDER_NAMES[providerId] ?? providerId; }
 
 export function messageText(ctx: Context): string {
   const message = ctx.message;

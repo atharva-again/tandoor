@@ -9,10 +9,6 @@ service Worker {
   rpc WatchMessage(MessageReference) returns (stream AgentEvent);
   rpc CancelMessage(MessageCancellation) returns (Acknowledgement);
   rpc ControlConversation(ConversationControlRequest) returns (ConversationControlResponse);
-  rpc GetModelSettings(ModelSettingsRequest) returns (ModelSettingsResponse);
-  rpc StartOAuthLogin(OAuthLoginStartRequest) returns (stream OAuthLoginEvent);
-  rpc RespondOAuthLogin(OAuthLoginPromptResponseRequest) returns (Acknowledgement);
-  rpc CancelOAuthLogin(OAuthLoginSessionRequest) returns (Acknowledgement);
   rpc StartGoogleLogin(GoogleLoginStartRequest) returns (GoogleLoginStartResponse);
   rpc CompleteGoogleLogin(GoogleLoginCompleteRequest) returns (GoogleLoginCompleteResponse);
   rpc CancelGoogleLogin(GoogleLoginSessionRequest) returns (GoogleLoginCancelResponse);
@@ -93,38 +89,6 @@ message ConversationControlResponse {
   string message = 2;
 }
 
-message ModelSettingsRequest {
-  string conversation_key = 1;
-}
-
-message ModelOption {
-  string provider = 1;
-  string model_id = 2;
-  string name = 3;
-  repeated string thinking_levels = 4;
-}
-
-message ModelSettingsResponse {
-  ModelOption current_model = 1;
-  repeated ModelOption available_models = 2;
-  repeated ModelOption scoped_models = 3;
-  repeated string authenticated_providers = 4;
-  string thinking_level = 5;
-}
-
-message OAuthLoginStartRequest {
-  string provider_id = 1;
-}
-
-message OAuthLoginSessionRequest {
-  string session_id = 1;
-}
-
-message OAuthLoginPromptResponseRequest {
-  string session_id = 1;
-  string input = 2;
-}
-
 message GoogleLoginStartRequest {
   string email = 1;
 }
@@ -161,62 +125,6 @@ message GoogleLoginCancelResponse {
 
 message GoogleLoginSessionRequest {
   string session_id = 1;
-}
-
-message OAuthLoginOption {
-  string id = 1;
-  string label = 2;
-  string description = 3;
-}
-
-message OAuthLoginStarted {}
-
-message OAuthLoginAuthUrl {
-  string url = 1;
-  string instructions = 2;
-}
-
-message OAuthLoginDeviceCode {
-  string user_code = 1;
-  string verification_uri = 2;
-  uint32 interval_seconds = 3;
-  uint32 expires_in_seconds = 4;
-}
-
-message OAuthLoginInfo {
-  string message = 1;
-  repeated string links = 2;
-}
-
-message OAuthLoginProgress {
-  string message = 1;
-}
-
-message OAuthLoginPrompt {
-  string prompt_type = 1;
-  string message = 2;
-  string placeholder = 3;
-  repeated OAuthLoginOption options = 4;
-}
-
-message OAuthLoginCompleted {}
-
-message OAuthLoginFailed {
-  string message = 1;
-}
-
-message OAuthLoginEvent {
-  string session_id = 1;
-  oneof event {
-    OAuthLoginStarted started = 2;
-    OAuthLoginAuthUrl auth_url = 3;
-    OAuthLoginDeviceCode device_code = 4;
-    OAuthLoginInfo info = 5;
-    OAuthLoginProgress progress = 6;
-    OAuthLoginPrompt prompt = 7;
-    OAuthLoginCompleted completed = 8;
-    OAuthLoginFailed failed = 9;
-  }
 }
 
 message AgentEvent {

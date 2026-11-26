@@ -19,13 +19,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function telegramRunContext(entry: unknown): TelegramRunContext | undefined {
   if (!isRecord(entry) || entry.kind !== "tandoor.telegram.input" || !isRecord(entry.data)) return undefined;
   const data = entry.data;
+  const threadId = typeof data.threadId === "string" ? data.threadId : "";
   if (
     typeof data.senderId !== "string" ||
     !/^\d{1,20}$/.test(data.senderId) ||
     typeof data.chatId !== "string" ||
     !/^-?\d{1,20}$/.test(data.chatId) ||
-    typeof data.threadId !== "string" ||
-    (data.threadId !== "" && !/^\d{1,20}$/.test(data.threadId)) ||
+    (threadId !== "" && !/^\d{1,20}$/.test(threadId)) ||
     typeof data.senderName !== "string" ||
     typeof data.channel !== "string" ||
     typeof data.timestampMs !== "number" ||
@@ -38,12 +38,12 @@ function telegramRunContext(entry: unknown): TelegramRunContext | undefined {
       chatId: Number(data.chatId),
       senderId: Number(data.senderId),
       chatType: "private",
-      ...(data.threadId ? { threadId: Number(data.threadId) } : {}),
+      ...(threadId ? { threadId: Number(threadId) } : {}),
     }),
     actorId: data.senderId,
     senderName: data.senderName,
     chatId: data.chatId,
-    threadId: data.threadId,
+    threadId,
     channel: data.channel,
     timestampMs: data.timestampMs,
   };

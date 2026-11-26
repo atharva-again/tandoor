@@ -15,8 +15,6 @@ import { TelegramDelivery } from "./telegram-delivery.js";
 import { TelegramGoogleAuth } from "./telegram-google-auth.js";
 import { TelegramLoginCoordinator } from "./telegram-login-coordinator.js";
 import { TelegramMessageHandler, TelegramReceiptWriteFailed } from "./telegram-message-handler.js";
-import { TelegramModelPickers } from "./telegram-model-pickers.js";
-import { TelegramProviderAuth } from "./telegram-provider-auth.js";
 import { createTelegramReplyTask } from "./telegram-replies.js";
 import { createTelegramAdmissionTask, TelegramInbox } from "./telegram-inbox.js";
 import { createScheduledWorkTask } from "./scheduled-work-task.js";
@@ -39,7 +37,6 @@ export class TelegramGateway {
     private readonly workers: PodmanWorkerManager,
     private readonly bridge: WorkerIntegrationBridge,
     private readonly google: TelegramGoogleAuth,
-    private readonly providers: TelegramProviderAuth,
     private readonly messages: TelegramMessageHandler,
     private readonly schedules: ScheduleService,
     private readonly store: GatewayWorkStore,
@@ -55,9 +52,7 @@ export class TelegramGateway {
       return worker;
     };
     const logins = new TelegramLoginCoordinator();
-    const providers = new TelegramProviderAuth(ui, connectWorker, logins);
     const google = new TelegramGoogleAuth(ui, config, connectWorker, logins);
-    const models = new TelegramModelPickers(ui, connectWorker, (identity, worker) => providers.showLoginPicker(identity, worker));
     const delivery = new TelegramDelivery(ui);
     const deliveryTask = createResponseDeliveryTask(new Map([["telegram", delivery]]), await legacyDeliveryIds(config.dataDir));
     const scheduleAdapter = new TelegramScheduledWorkAdapter({
@@ -85,13 +80,13 @@ export class TelegramGateway {
       });
       const inbox = new TelegramInbox(store, admissionTask);
       const commands = new TelegramCommands({
-        ui, connectWorker, providers, google, models, scheduling,
+        ui, connectWorker, google, scheduling,
         googleLoginEnabled: Boolean(config.googleOAuthWebClientFile),
       });
       const messages = new TelegramMessageHandler({
-        ui, token: config.telegramBotToken, providers, google, commands, inbox,
+        ui, token: config.telegramBotToken, google, commands, inbox,
       });
-      return new TelegramGateway(ui, workers, bridge, google, providers, messages, schedules, store);
+      return new TelegramGateway(ui, workers, bridge, google, messages, schedules, store);
     } catch (error) {
       bridge.stop();
       await store.close().catch(() => undefined);
@@ -132,7 +127,7 @@ export class TelegramGateway {
     this.stopping = true;
     this.pollingController?.abort();
     await this.polling?.catch(() => undefined);
-    const results = await Promise.allSettled([this.store.close(), this.google.stop(), this.providers.stop()]);
+    const results = await Promise.allSettled([this.store.close(), this.google.stop()]);
     this.bridge.stop();
     const failures = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
     if (failures.length) throw new AggregateError(failures, "Gateway shutdown did not finish cleanly.");

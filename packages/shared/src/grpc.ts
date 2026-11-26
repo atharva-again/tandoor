@@ -3,31 +3,22 @@ import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
 import type { ProtoGrpcType } from "../../protocol/generated/worker.js";
 import type { WorkerClient } from "../../protocol/generated/tandoor/v1/Worker.js";
-import type { ModelSettingsResponse__Output } from "../../protocol/generated/tandoor/v1/ModelSettingsResponse.js";
 import type { MessageReceipt__Output } from "../../protocol/generated/tandoor/v1/MessageReceipt.js";
 import type { GoogleLoginCancelResponse__Output } from "../../protocol/generated/tandoor/v1/GoogleLoginCancelResponse.js";
 
 export type { WorkerClient, WorkerHandlers } from "../../protocol/generated/tandoor/v1/Worker.js";
 export type { AgentMessage__Output as AgentMessage } from "../../protocol/generated/tandoor/v1/AgentMessage.js";
 export type { AgentEvent, AgentEvent__Output as WireAgentEvent } from "../../protocol/generated/tandoor/v1/AgentEvent.js";
-export type { OAuthLoginEvent, OAuthLoginEvent__Output as WireOAuthLoginEvent } from "../../protocol/generated/tandoor/v1/OAuthLoginEvent.js";
 export type { TelegramAttachment__Output as TelegramAttachment } from "../../protocol/generated/tandoor/v1/TelegramAttachment.js";
 export type { MessageReference__Output as MessageReference } from "../../protocol/generated/tandoor/v1/MessageReference.js";
 export type { MessageReceipt__Output as MessageReceipt } from "../../protocol/generated/tandoor/v1/MessageReceipt.js";
 export type { HealthResponse__Output as HealthResponse } from "../../protocol/generated/tandoor/v1/HealthResponse.js";
-export type { ModelOption__Output as ModelOption } from "../../protocol/generated/tandoor/v1/ModelOption.js";
 export type { IntegrationRequest__Output as IntegrationRequest } from "../../protocol/generated/tandoor/v1/IntegrationRequest.js";
 export type { IntegrationRequestResolution__Output as IntegrationRequestResolution } from "../../protocol/generated/tandoor/v1/IntegrationRequestResolution.js";
 export type { GoogleLoginStartResponse__Output as GoogleLoginStartResponse } from "../../protocol/generated/tandoor/v1/GoogleLoginStartResponse.js";
 export type { GoogleLoginCancelResponse__Output as GoogleLoginCancelResponse } from "../../protocol/generated/tandoor/v1/GoogleLoginCancelResponse.js";
 
-export type ModelSettingsResponse = ModelSettingsResponse__Output & {
-  currentModel: NonNullable<ModelSettingsResponse__Output["currentModel"]>;
-};
-
-const conversationActions = [
-  "session", "reset", "abort", "compact", "model", "logout", "set_scoped_models", "thinking",
-] as const;
+const conversationActions = ["session", "reset", "abort", "compact"] as const;
 export type ConversationAction = (typeof conversationActions)[number];
 const actions: ReadonlySet<string> = new Set(conversationActions);
 export const isConversationAction = (value: string): value is ConversationAction => actions.has(value);
@@ -50,7 +41,7 @@ export function decodeEvent<T extends { event?: string }>(wire: T): OneOfEvent<T
   return { type, data } as OneOfEvent<T>;
 }
 
-export const WORKER_PROTOCOL_VERSION = "3";
+export const WORKER_PROTOCOL_VERSION = "7";
 
 const protoPath = resolve(process.cwd(), "packages/protocol/proto/tandoor/v1/worker.proto");
 const definition = protoLoader.loadSync(protoPath, {

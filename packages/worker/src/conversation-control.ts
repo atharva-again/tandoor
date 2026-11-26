@@ -1,23 +1,17 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import {
   UsageDoc,
   type Conversation,
   type Harness,
 } from "@earendil-works/pi-durable";
+import type { createModels } from "@earendil-works/pi-ai/models";
 import type { ConversationAction } from "../../shared/src/grpc.js";
-import type { FileCredentialStore } from "./auth/credential-store.js";
-import type { ConversationModelSettingsStore } from "./model-settings.js";
-import { getAvailableOAuthModels, OAUTH_MODEL_PROVIDERS } from "./model-catalog.js";
 
 export interface ConversationControlOptions {
   harness: Harness;
-  models: Parameters<typeof getAvailableOAuthModels>[0];
-  credentials: Pick<FileCredentialStore, "list">;
-  modelSettings: ConversationModelSettingsStore;
+  models: ReturnType<typeof createModels>;
   workspace: string;
-  isLoginInProgress(providerId: string): boolean;
 }
 
 function markdownTableCell(value: string): string {
@@ -140,7 +134,6 @@ async function sessionSummary(
 export async function controlConversation(
   options: ConversationControlOptions,
   conversation: Conversation,
-  key: string,
   action: ConversationAction,
   instructions: string,
 ): Promise<string> {
@@ -164,90 +157,6 @@ export async function controlConversation(
     return settled.state.outcome.result.entryId === undefined
       ? "There is nothing to compact yet."
       : "Conversation context compacted.";
-  }
-  if (action === "model") {
-    const requested = instructions.trim();
-    if (!requested) {
-      const model = (await conversation.agent(BACKGROUND_CONTEXT)).model;
-      return model
-        ? `Current model: ${model.provider}/${model.modelId}. Set one with /model provider/model-id.`
-        : "No model is configured.";
-    }
-    const separator = requested.indexOf("/");
-    if (separator < 1 || separator === requested.length - 1) {
-      throw new Error("Use /model provider/model-id, for example /model openai/gpt-6-luna.");
-    }
-    const provider = requested.slice(0, separator);
-    const modelId = requested.slice(separator + 1);
-    const { models } = await getAvailableOAuthModels(options.models, options.credentials);
-    const model = models.find((candidate) => candidate.provider === provider && candidate.id === modelId);
-    if (!model) {
-  throw new Error(`Model unavailable: ${provider}/${modelId}. Sign in with /login_provider, then choose a model with /model.`);
-    }
-    await conversation.configure({ model: { provider, modelId } }, BACKGROUND_CONTEXT);
-    return `Model set to ${provider}/${modelId}.`;
-  }
-  if (action === "logout") {
-    const providerId = instructions.trim();
-    if (!OAUTH_MODEL_PROVIDERS.has(providerId)) {
-      throw new Error("Choose an OAuth provider shown in /logout_provider.");
-    }
-    if (options.isLoginInProgress(providerId)) {
-      throw new Error("A login for this provider is still in progress. Cancel it before signing out.");
-    }
-    await options.models.logout(providerId);
-    return `Signed out of ${providerId}.`;
-  }
-  if (action === "set_scoped_models") {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(instructions);
-    } catch {
-      throw new Error("Scoped models must be a JSON array of provider/model references.");
-    }
-    if (!Array.isArray(parsed)) throw new Error("Scoped models must be a JSON array.");
-    const { models: availableModels } = await getAvailableOAuthModels(options.models, options.credentials);
-    const references: Array<{ provider: string; modelId: string }> = [];
-    for (const item of parsed) {
-      if (
-        typeof item !== "object" ||
-        item === null ||
-        !("provider" in item) ||
-        typeof item.provider !== "string" ||
-        !("modelId" in item) ||
-        typeof item.modelId !== "string"
-      ) {
-        throw new Error("Each scoped model must include a provider and modelId.");
-      }
-      const model = availableModels.find(
-        (candidate) => candidate.provider === item.provider && candidate.id === item.modelId,
-      );
-      if (!model) {
-        throw new Error(`Model unavailable: ${item.provider}/${item.modelId}. Sign in first.`);
-      }
-      references.push({ provider: item.provider, modelId: item.modelId });
-    }
-    const saved = await options.modelSettings.setScopedModels(key, references);
-    return saved.length === 0
-      ? "Scoped model list cleared."
-      : `Scoped model list saved with ${saved.length} model(s).`;
-  }
-  if (action === "thinking") {
-    const requested = instructions.trim().toLowerCase();
-    const agent = await conversation.agent(BACKGROUND_CONTEXT);
-    if (!requested) return `Thinking level: ${agent.thinkingLevel ?? "off"}.`;
-    const model = agent.model
-      ? options.models.getModel(agent.model.provider, agent.model.modelId)
-      : undefined;
-    const levels = model ? getSupportedThinkingLevels(model) : ["off"];
-    if (!levels.includes(requested as (typeof levels)[number])) {
-      throw new Error(`Unsupported thinking level for the current model. Choose one of: ${levels.join(", ")}.`);
-    }
-    await conversation.configure(
-      { thinkingLevel: requested as NonNullable<typeof agent.thinkingLevel> },
-      BACKGROUND_CONTEXT,
-    );
-    return `Thinking level set to ${requested}.`;
   }
   throw new Error(`Unsupported conversation action: ${action}`);
 }
