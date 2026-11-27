@@ -41,9 +41,9 @@ file; only regular files inside that worker's workspace are allowed.
 `/new`, `/compact`, and `/abort` operate on the private conversation;
 `/session` shows conversation message counts, token usage, recorded cost,
 current context estimate, and runtime settings. `/help` and `/start` are also
-available. Each `/start` creates a new `Start` topic and sends the greeting
-there. Conversation state and bot replies stay in the topic where the user
-messaged.
+available. `/start` greets the user in the private chat. All messages in that
+chat share one conversation, including messages sent from Telegram topics that
+already exist.
 The existing OpenAI Codex subscription credential is shared by all isolated
 workers; users are never asked to sign in. All conversations use the fixed
 `openai-codex/gpt-6-luna` model with high
@@ -94,7 +94,7 @@ replies. Results and file contents are saved before delivery; each successfully
 sent text chunk or file has its own durable receipt. Temporary Telegram delivery failures
 are retried with capped exponential backoff, honoring Telegram's retry delay.
 A definitive rejection of one part does not block the remaining parts.
-If Telegram reports that a private chat or topic
+If Telegram reports that a private chat
 is unreachable, Tandoor cancels the reminders for that destination instead of running work
 whose results cannot be delivered. A lost response or a crash between Telegram
 accepting a part and saving its receipt can still duplicate that part; delivery is not
@@ -190,7 +190,7 @@ Build the worker image with
 `podman build -t localhost/tandoor-worker:dev -f Containerfile .` and start
 the gateway with `pnpm run dev`. The existing OpenAI Codex OAuth credential is
 seeded into the shared credential store on first worker startup. `/start`
-creates a `Start` topic and greets the user there.
+greets the user in the private chat.
 
 Rebuild the worker image after changes to worker code or the gRPC protocol.
 The gateway rejects incompatible worker protocols with a rebuild instruction.
@@ -198,4 +198,4 @@ The gateway rejects incompatible worker protocols with a rebuild instruction.
 typecheck and worker image build both run it automatically.
 
 The bot only responds to allowlisted users in private chats. Group chats are
-not supported.
+not supported. Tandoor does not create or reply to Telegram topics.

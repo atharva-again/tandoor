@@ -38,9 +38,7 @@ export class TelegramUI {
   }
 
   async reply(ctx: Context, identity: TelegramMessageIdentity, text: string): Promise<void> {
-    await ctx.api.sendMessage(identity.chatId, text, {
-      ...(identity.threadId === undefined ? {} : { message_thread_id: identity.threadId }),
-    });
+    await ctx.api.sendMessage(identity.chatId, text);
   }
 
   buttonRows<T>(buttons: T[], columns = 2): T[][] {
@@ -60,9 +58,6 @@ export class TelegramUI {
         if (error instanceof Error && error.message.toLowerCase().includes("message is not modified")) return;
       }
     }
-    await this.bot.api.sendMessage(identity.chatId, text, {
-      ...(identity.threadId === undefined ? {} : { message_thread_id: identity.threadId }),
-      reply_markup: replyMarkup,
-    });
+    await this.bot.api.sendMessage(identity.chatId, text, { reply_markup: replyMarkup });
   }
 }

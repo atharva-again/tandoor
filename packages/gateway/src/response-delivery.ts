@@ -15,7 +15,7 @@ export type ResponseDeliveryInput = {
 export type DeliveryResult = { status: "delivered" | "partial" | "skipped" | "unreachable" };
 export type DeliveryFailure =
   | { kind: "retry"; minimumDelayMs?: number }
-  | { kind: "unreachable"; destination: "user" | "topic" }
+  | { kind: "unreachable" }
   | { kind: "rejected" };
 
 const incompleteNotice = "One or more parts of this response could not be delivered.";
@@ -92,7 +92,8 @@ export function createResponseDeliveryTask(
               await adapter.cleanup(task.input, "skipped");
               await runtime.commit(async (tx) => {
                 await revokeSchedules(tx, bookKey, ({ target }) =>
-                  failure.destination === "user" || target.conversationKey === task.input.target.conversationKey,
+                  target.clientId === task.input.target.clientId &&
+                  target.scope.id === task.input.target.scope.id,
                 );
                 return { status: "terminal", outcome: { status: "completed", result: { status: "unreachable" } } };
               }, context);

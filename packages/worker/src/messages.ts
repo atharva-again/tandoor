@@ -65,7 +65,7 @@ export class WorkerMessages {
             responseSnapshot: true,
             channel: message.channel || "telegram",
             senderId: message.senderId, senderName: message.senderName,
-            chatId: message.chatId, threadId: message.threadId, timestampMs: message.timestampMs,
+            chatId: message.chatId, timestampMs: message.timestampMs,
           },
         },
       }, BACKGROUND_CONTEXT);

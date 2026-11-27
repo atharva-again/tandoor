@@ -20,8 +20,8 @@ import { createTelegramAdmissionTask, TelegramInbox } from "./telegram-inbox.js"
 import { createScheduledWorkTask } from "./scheduled-work-task.js";
 import { TelegramScheduledWorkAdapter } from "./telegram-scheduled-work-adapter.js";
 import { TelegramSchedulingIntegration } from "./telegram-scheduling-integration.js";
+import { disableTelegramTopics } from "./telegram-settings.js";
 import { TelegramUI } from "./telegram-ui.js";
-import { enableTelegramTopics } from "./telegram-topics.js";
 import { WorkerIntegrationBridge, type ServiceIntegration } from "./worker-integration-bridge.js";
 import type { PodmanWorkerManager } from "./worker-manager.js";
 import type { ConnectWorker } from "./worker-client.js";
@@ -99,8 +99,8 @@ export class TelegramGateway {
     await this.google.startGoogleOAuthCallbackServer();
     this.ui.bot.on("message", (ctx) => this.messages.handleMessageUpdate(ctx));
     this.ui.bot.on("callback_query:data", (ctx) => this.ui.handleCallback(ctx));
-    await enableTelegramTopics(this.ui.bot)
-      .catch((error: unknown) => console.warn("Could not enable Telegram topics:", error instanceof Error ? error.message : error));
+    await disableTelegramTopics(this.ui.bot)
+      .catch((error: unknown) => console.warn("Could not disable Telegram topics:", error instanceof Error ? error.message : error));
     await this.ui.bot.api.setMyCommands(TELEGRAM_COMMANDS);
     await this.schedules.initialize();
     this.store.start();

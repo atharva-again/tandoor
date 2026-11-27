@@ -7,7 +7,6 @@ export interface TelegramRunContext {
   actorId: string;
   senderName: string;
   chatId: string;
-  threadId: string;
   channel: string;
   timestampMs: number;
 }
@@ -19,13 +18,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function telegramRunContext(entry: unknown): TelegramRunContext | undefined {
   if (!isRecord(entry) || entry.kind !== "tandoor.telegram.input" || !isRecord(entry.data)) return undefined;
   const data = entry.data;
-  const threadId = typeof data.threadId === "string" ? data.threadId : "";
   if (
     typeof data.senderId !== "string" ||
     !/^\d{1,20}$/.test(data.senderId) ||
     typeof data.chatId !== "string" ||
     !/^-?\d{1,20}$/.test(data.chatId) ||
-    (threadId !== "" && !/^\d{1,20}$/.test(threadId)) ||
     typeof data.senderName !== "string" ||
     typeof data.channel !== "string" ||
     typeof data.timestampMs !== "number" ||
@@ -38,12 +35,10 @@ function telegramRunContext(entry: unknown): TelegramRunContext | undefined {
       chatId: Number(data.chatId),
       senderId: Number(data.senderId),
       chatType: "private",
-      ...(threadId ? { threadId: Number(threadId) } : {}),
     }),
     actorId: data.senderId,
     senderName: data.senderName,
     chatId: data.chatId,
-    threadId,
     channel: data.channel,
     timestampMs: data.timestampMs,
   };
@@ -96,7 +91,7 @@ export async function telegramContextForRun(api: ToolExecutionApi, context: Cont
   const first = telegramInputs[0]!;
   if (
     telegramInputs.some(
-      (input) => input.chatId !== first.chatId || input.threadId !== first.threadId || input.channel !== first.channel,
+      (input) => input.chatId !== first.chatId || input.channel !== first.channel,
     )
   ) {
     throw new Error("This run includes messages from multiple Telegram destinations. Ask again in a fresh message.");

@@ -31,7 +31,8 @@ message AgentMessage {
   string sender_id = 4;
   string sender_name = 5;
   string chat_id = 6;
-  string thread_id = 7;
+  reserved 7;
+  reserved "thread_id";
   int64 timestamp_ms = 8;
   repeated TelegramAttachment attachments = 9;
   string channel = 10;

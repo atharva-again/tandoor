@@ -49,7 +49,7 @@ export class TelegramScheduledWorkAdapter implements ScheduledWorkAdapter {
           ...reference, channel: input.target.channel,
           text: `Scheduled work: ${input.name}\n\n${input.prompt}\n\nThis is an automated scheduled run. Do the requested work now and report the result. Do not change schedules unless explicitly requested.`,
           attachments: [], senderId: input.target.actorId, senderName: input.target.senderName,
-          chatId: String(identity.chatId), threadId: identity.threadId === undefined ? "" : String(identity.threadId),
+          chatId: String(identity.chatId),
           timestampMs: scheduledAt,
         },
       }, { signal });

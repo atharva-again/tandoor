@@ -106,7 +106,6 @@ export function createSchedulingExtension(options: SchedulingOptions) {
         senderName: telegram.senderName,
         conversationKey: telegram.conversationKey,
         chatId: telegram.chatId,
-        threadId: telegram.threadId,
         chatType: "private",
         channel: telegram.channel,
       },

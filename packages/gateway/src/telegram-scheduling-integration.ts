@@ -50,11 +50,9 @@ function targetForRequest(
     ? payload.senderName.slice(0, 200)
     : "You";
   const chatId = typeof payload.chatId === "string" ? payload.chatId : "";
-  const threadId = typeof payload.threadId === "string" ? payload.threadId : "";
   const channel = typeof payload.channel === "string" ? payload.channel : "";
   if (
     !/^\d{1,20}$/.test(chatId) ||
-    (threadId !== "" && (!/^\d{1,20}$/.test(threadId) || Number(threadId) <= 0)) ||
     payload.chatType !== "private" ||
     !channel ||
     channel.length > 100
@@ -65,14 +63,12 @@ function targetForRequest(
     chatId: Number(chatId),
     senderId: Number(actorId),
     chatType: "private",
-    ...(threadId ? { threadId: Number(threadId) } : {}),
   };
   if (
     !Number.isSafeInteger(identity.chatId) ||
     !Number.isSafeInteger(identity.senderId) ||
-    (identity.threadId !== undefined && !Number.isSafeInteger(identity.threadId)) ||
     identity.chatId !== identity.senderId ||
-    !isCurrentOrLegacyTopicConversationKey(conversationKey(identity), request.conversationKey) ||
+    conversationKey(identity) !== request.conversationKey ||
     String(identity.chatId) !== sourceScope.id
   ) {
     throw new Error("The scheduling request does not match its Telegram conversation.");
@@ -84,16 +80,8 @@ function targetForRequest(
     senderName,
     conversationKey: conversationKey(identity),
     channel,
-    destination: { chatId, threadId, chatType: "private" },
+    destination: { chatId, chatType: "private" },
   };
-}
-
-function isCurrentOrLegacyTopicConversationKey(current: string, candidate: string): boolean {
-  if (candidate === current) return true;
-  if (current.endsWith(":thread:root") &&
-    candidate === current.slice(0, -":thread:root".length)) return true;
-  return candidate.startsWith(`${current}:thread:`) &&
-    /^\d+$/.test(candidate.slice(`${current}:thread:`.length));
 }
 
 function formatScheduleRows(schedules: readonly ScheduleSummary[]): string {

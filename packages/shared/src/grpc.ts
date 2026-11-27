@@ -41,7 +41,7 @@ export function decodeEvent<T extends { event?: string }>(wire: T): OneOfEvent<T
   return { type, data } as OneOfEvent<T>;
 }
 
-export const WORKER_PROTOCOL_VERSION = "7";
+export const WORKER_PROTOCOL_VERSION = "8";
 
 const protoPath = resolve(process.cwd(), "packages/protocol/proto/tandoor/v1/worker.proto");
 const definition = protoLoader.loadSync(protoPath, {

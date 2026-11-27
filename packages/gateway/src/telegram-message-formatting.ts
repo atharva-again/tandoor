@@ -21,9 +21,8 @@ export function splitTelegramText(text: string): string[] {
 }
 
 export async function sendRichMarkdownMessage(ctx: Context, identity: TelegramMessageIdentity, text: string): Promise<void> {
-  const options = identity.threadId === undefined ? {} : { message_thread_id: identity.threadId };
   for (const chunk of splitTelegramText(text)) {
-    try { await ctx.api.sendRichMessage(identity.chatId, { markdown: chunk }, options); }
-    catch { await ctx.api.sendMessage(identity.chatId, chunk, options); }
+    try { await ctx.api.sendRichMessage(identity.chatId, { markdown: chunk }, {}); }
+    catch { await ctx.api.sendMessage(identity.chatId, chunk, {}); }
   }
 }

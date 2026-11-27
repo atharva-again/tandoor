@@ -33,11 +33,8 @@ export function classifyTelegramSendFailure(error: unknown): DeliveryFailure {
   const { error_code: code, description, parameters } = error;
   if (code === 429) return { kind: "retry", minimumDelayMs: (parameters.retry_after ?? 0) * 1_000 };
   if (code === 408 || code >= 500) return { kind: "retry" };
-  if (code === 400 && /(?:message thread|topic).*(?:not found|closed|deleted)|\b(?:TOPIC_CLOSED|TOPIC_DELETED|MESSAGE_THREAD_NOT_FOUND)\b/i.test(description)) {
-    return { kind: "unreachable", destination: "topic" };
-  }
   if (code === 403 || /chat not found|bot was blocked|user is deactivated|can't initiate conversation/i.test(description)) {
-    return { kind: "unreachable", destination: "user" };
+    return { kind: "unreachable" };
   }
   return { kind: "rejected" };
 }

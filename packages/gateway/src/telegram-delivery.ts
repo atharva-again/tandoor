@@ -35,7 +35,7 @@ export class TelegramDelivery implements ResponseDeliveryAdapter {
 
   private async send(input: ResponseDeliveryInput, index: number, sendSignal: TelegramSignal): Promise<void> {
     const identity = telegramIdentityForTarget(input.target);
-    const options = identity.threadId === undefined ? {} : { message_thread_id: identity.threadId };
+    const options = {};
     const { api } = this.ui.bot;
     const chunks = this.chunks(input.response);
     if (index < chunks.length) {
@@ -84,7 +84,7 @@ export class TelegramDelivery implements ResponseDeliveryAdapter {
     return classifyTelegramSendFailure(error);
   }
 
-  private async sendText(chatId: number, text: string, options: { message_thread_id?: number }, signal: TelegramSignal): Promise<void> {
+  private async sendText(chatId: number, text: string, options: {}, signal: TelegramSignal): Promise<void> {
     const { api } = this.ui.bot;
     try { await api.sendRichMessage(chatId, { markdown: text }, options, signal); }
     catch (error) {

@@ -6,7 +6,6 @@ export interface TelegramMessageIdentity {
   chatId: number;
   chatType: TelegramChatType;
   senderId: number;
-  threadId?: number;
 }
 
 export type WorkerScope = {
@@ -24,8 +23,7 @@ export function workerScope(identity: TelegramMessageIdentity): WorkerScope {
 
 export function conversationKey(identity: TelegramMessageIdentity): string {
   const scope = workerScope(identity);
-  const thread = identity.threadId === undefined ? "root" : String(identity.threadId);
-  return `telegram:${scope.kind}:${scope.id}:chat:${identity.chatId}:thread:${thread}`;
+  return `telegram:${scope.kind}:${scope.id}:chat:${identity.chatId}`;
 }
 
 /** Filesystem-safe, non-reversible identifier for a user scope. */

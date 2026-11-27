@@ -31,7 +31,6 @@ interface ActiveGoogleLogin extends GoogleOAuthSession {
   userId: number;
   worker: WorkerClient;
   authChatId: number;
-  threadId?: number;
   statusMessageId?: number;
   release(): void;
 }
@@ -72,8 +71,7 @@ export class TelegramGoogleAuth {
           const login = this.googleLoginsByUser.get(identity.senderId);
           if (
             login?.flowId === action.flowId &&
-            login.authChatId === identity.chatId &&
-            login.threadId === identity.threadId
+            login.authChatId === identity.chatId
           ) {
             await this.cancelGoogleLogin(login);
           }
@@ -432,7 +430,6 @@ export class TelegramGoogleAuth {
       await this.gateway.bot.api.sendMessage(
         identity.chatId,
         "You already have a login in progress. Finish it or use /cancel_login first.",
-        identity.threadId === undefined ? {} : { message_thread_id: identity.threadId },
       );
       return false;
     }
@@ -453,7 +450,6 @@ export class TelegramGoogleAuth {
           "This account will be used in your private chats.",
         ].join("\n"),
         {
-          ...(identity.threadId === undefined ? {} : { message_thread_id: identity.threadId }),
           reply_markup: { inline_keyboard: [[this.button("Cancel Login", { type: "cancel_google_login", flowId })]] },
         },
       );
@@ -462,7 +458,6 @@ export class TelegramGoogleAuth {
       await this.gateway.bot.api.sendMessage(
         identity.chatId,
         "I cannot message you privately yet. Open this bot's private chat and send /start, then try /login_google again.",
-        identity.threadId === undefined ? {} : { message_thread_id: identity.threadId },
       );
       return false;
     }
@@ -472,7 +467,6 @@ export class TelegramGoogleAuth {
       userId: identity.senderId,
       worker,
       authChatId,
-      ...(identity.threadId === undefined ? {} : { threadId: identity.threadId }),
       statusMessageId: statusMessage.message_id,
       state: { status: "awaiting_email" },
       release,
@@ -489,18 +483,6 @@ export class TelegramGoogleAuth {
     const command = parseCommand(text, this.gateway.bot.botInfo.username);
     if (command?.name === "cancel_login") {
       await this.cancelGoogleLogin(login);
-      return true;
-    }
-    if (identity.threadId !== login.threadId) {
-      const isSignInReply =
-        (login.state.status === "awaiting_email" && isGoogleAccountEmail(text)) ||
-        (login.state.status === "awaiting_callback" && isGoogleCallbackUrl(text));
-      if (!isSignInReply) return false;
-      await this.gateway.reply(
-        ctx,
-        identity,
-        "Google sign in is waiting in the topic where it started. Open that topic to continue; this message was not used.",
-      );
       return true;
     }
     if (command) {
@@ -667,7 +649,6 @@ export class TelegramGoogleAuth {
   ): Promise<void> {
     try {
       const message = await this.gateway.bot.api.sendMessage(login.authChatId, text, {
-        ...(login.threadId === undefined ? {} : { message_thread_id: login.threadId }),
         reply_markup: replyMarkup ?? { inline_keyboard: [] },
       });
       login.statusMessageId = message.message_id;

@@ -54,20 +54,12 @@ import SiteLayout from "../../layouts/SiteLayout.astro";
       history or files.
     </p>
 
-    <h2>Personal and Group Spaces</h2>
+    <h2>Personal Accounts</h2>
     <p>
-      Personal Google credentials are kept in the user's personal worker.
-      Group topics share the group's conversation and workspace. If you ask
-      Tandoor to use your personal Google account from a group, the result
-      may be included in that group's conversation and visible to its
-      members. A Google account connected as a shared group account is
-      available to the group worker.
-    </p>
-    <p>
-      The agent running in a worker can access that worker's files and
-      connected credentials to complete requests. Personal workers and
-      group workers have separate persistent storage, except that members
-      of a group intentionally share that group's worker and workspace.
+      Google credentials and workspace files are kept in the user's personal
+      worker. Tandoor handles private chats only; group chats are not supported.
+      The agent running in the worker can access that worker's files and
+      connected credentials to complete requests.
     </p>
 
     <h2>Service Providers</h2>

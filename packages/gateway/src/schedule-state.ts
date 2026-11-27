@@ -13,7 +13,7 @@ export type ScheduleBookData = { entries: Record<string, ScheduleEntry> };
 export type ScheduleLink = { scheduleId: string; taskId?: number };
 export type ScheduleCreation = Pick<ScheduledWorkInput, "name" | "firstRunAt" | "schedule"> & { scheduleId: string };
 
-// A book contains only live schedules for one client/user, including their topics.
+// A book contains only live schedules for one client/user.
 // A task may start an occurrence or send its result only while it owns this record.
 export const ScheduleBook = defineDocFamily<ScheduleBookData, null>({
   kind: "tandoor.schedule-book", version: 1, family: true, scope: "session",

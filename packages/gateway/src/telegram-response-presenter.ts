@@ -42,12 +42,12 @@ export class TelegramResponsePresenter {
 
   private async flush(): Promise<void> {
     if (this.stopped || !this.latest) return;
-    const { chatId, threadId } = this.identity;
+    const { chatId } = this.identity;
     if (this.mode !== "preview") {
       try {
         await withTelegramDeadline((signal) => this.ui.bot.api.sendRichMessageDraft(chatId, this.draftId, {
           markdown: this.latest,
-        }, threadId === undefined ? {} : { message_thread_id: threadId }, signal), this.signal);
+        }, {}, signal), this.signal);
         this.startDraftHeartbeat();
         return;
       } catch (error) {
@@ -55,7 +55,7 @@ export class TelegramResponsePresenter {
           try {
             await withTelegramDeadline((signal) => this.ui.bot.api.sendRichMessageDraft(chatId, this.draftId, {
               blocks: [{ type: "paragraph", text: this.latest }],
-            }, threadId === undefined ? {} : { message_thread_id: threadId }, signal), this.signal);
+            }, {}, signal), this.signal);
             this.startDraftHeartbeat();
             return;
           } catch {

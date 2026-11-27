@@ -35,19 +35,14 @@ export class TelegramCommands {
     const { ui, connectWorker, google, scheduling } = this.options;
     const { name, args } = command;
     const key = conversationKey(identity);
-    let responseIdentity = identity;
-    const reply = (text: string, target = responseIdentity) => ui.reply(ctx, target, text);
+    const reply = (text: string) => ui.reply(ctx, identity, text);
     const worker = () => connectWorker(workerScope(identity));
     const control = async (action: ConversationAction) => {
       const client = await worker();
       return unary(client, "controlConversation", { conversationKey: key, action, instructions: args });
     };
     const handlers: Record<string, () => Promise<void>> = {
-      start: async () => {
-        const topic = await ui.bot.api.createForumTopic(identity.chatId, "Start");
-        responseIdentity = { ...identity, threadId: topic.message_thread_id };
-        await reply("Hi! I’m Tandoor, your AI assistant in Telegram. Send a question, file, image, or a task to schedule.\n\nConnect Google Workspace with /login_google. Use /help for commands.");
-      },
+      start: () => reply("Hi! I’m Tandoor, your AI assistant in Telegram. Send a question, file, image, or a task to schedule.\n\nConnect Google Workspace with /login_google. Use /help for commands."),
       help: () => reply(["Send Tandoor a private message to chat.", "", ...TELEGRAM_COMMANDS.map((item) => `/${item.command}: ${item.description}`)].join("\n")),
       scheduled: async () => reply(await scheduling.command(workerScope(identity), identity, args)),
       login_google: async () => {

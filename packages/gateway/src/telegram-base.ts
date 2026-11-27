@@ -11,17 +11,15 @@ export interface InlineKeyboardMarkup { inline_keyboard: InlineKeyboardButton[][
 export function telegramIdentity(ctx: Context): TelegramMessageIdentity | undefined {
   const message = ctx.message;
   if (!message || ctx.from?.id === undefined || message.chat.type !== "private") return undefined;
-  const threadId = "message_thread_id" in message ? message.message_thread_id : undefined;
-  return { chatId: message.chat.id, senderId: ctx.from.id, chatType: "private", ...(threadId === undefined ? {} : { threadId }) };
+  return { chatId: message.chat.id, senderId: ctx.from.id, chatType: "private" };
 }
 
 export function callbackIdentity(ctx: Context) {
   const query = ctx.callbackQuery;
   if (!query || !("message" in query) || !query.message || query.message.chat.type !== "private") return undefined;
   const message = query.message;
-  const threadId = "message_thread_id" in message ? message.message_thread_id : undefined;
   const identity: TelegramMessageIdentity = {
-    chatId: message.chat.id, senderId: query.from.id, chatType: "private", ...(threadId === undefined ? {} : { threadId }),
+    chatId: message.chat.id, senderId: query.from.id, chatType: "private",
   };
   return { identity, messageId: message.message_id };
 }
