@@ -56,9 +56,9 @@ If sign in redirects to an error page, paste the full URL into the private bot
 chat. Tandoor deletes that reply after forwarding it.
 
 The worker image includes the `gog` CLI, which the agent can run directly from
-its shell for Google Workspace tasks. Tandoor also invokes Gog through the
-authenticated integration bridge for sign-in and account management. Other
-integrations use that same bridge.
+its shell for Google Workspace tasks. Tandoor checks connected Google accounts
+before using Gog and asks users to run `/login_google` for sign-in or
+reauthorization.
 
 When `TANDOOR_CONTEXT_DEV_API_KEY` is configured, the agent has Durable
 `web_search` and `web_fetch` tools for searching and reading public pages through
